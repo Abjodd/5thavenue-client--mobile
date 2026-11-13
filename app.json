@@ -3,6 +3,7 @@
     "name": "5th-avenue-client-mobile-app",
     "slug": "5th-avenue-client-mobile-app",
     "version": "1.0.0",
+    "scheme": "fifthavenue",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -20,6 +21,10 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar"
+    ]
   }
 }
