@@ -23,12 +23,12 @@ import {
   PortalClient,
 } from "../../src/lib/api";
 
-type Section = "profile" | "appearance" | "company";
-type ThemeChoice = "light" | "dark" | "system";
+import {
+  useAppTheme,
+  ThemeChoice,
+} from "../../src/context/ThemeContext";
 
-const NAVY = "#17243A";
-const MUTED = "#818895";
-const BORDER = "#E9EAF0";
+type Section = "profile" | "appearance" | "company";
 
 function getInitials(name?: string) {
   return (name || "Client")
@@ -48,7 +48,7 @@ function displayValue(value: unknown): string {
   return "";
 }
 
-
+// Reusable input field
 function Field({
   label,
   value,
@@ -56,6 +56,7 @@ function Field({
   placeholder,
   keyboardType = "default",
   editable = true,
+  colors,
 }: {
   label: string;
   value: string;
@@ -63,37 +64,53 @@ function Field({
   placeholder?: string;
   keyboardType?: "default" | "email-address" | "phone-pad";
   editable?: boolean;
+  colors: ReturnType<typeof useAppTheme>["colors"];
 }) {
   return (
     <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+      <Text style={[styles.fieldLabel, { color: colors.fieldLabel }]}>
+        {label}
+      </Text>
+
       <TextInput
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder || label}
-        placeholderTextColor="#A7ABB4"
+        placeholderTextColor={colors.placeholder}
         keyboardType={keyboardType}
         editable={editable}
         autoCapitalize="none"
+        secureTextEntry={label.toLowerCase().includes("password")}
         style={[
           styles.input,
-          !editable && styles.readOnlyInput,
+          {
+            backgroundColor: editable
+              ? colors.input
+              : colors.disabled,
+            borderColor: colors.border,
+            color: editable
+              ? colors.inputText
+              : colors.disabledText,
+          },
         ]}
       />
     </View>
   );
 }
 
+// Reusable section navigation button
 function SectionButton({
   icon,
   label,
   active,
   onPress,
+  colors,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   active: boolean;
   onPress: () => void;
+  colors: ReturnType<typeof useAppTheme>["colors"];
 }) {
   return (
     <TouchableOpacity
@@ -101,18 +118,28 @@ function SectionButton({
       activeOpacity={0.8}
       style={[
         styles.sectionButton,
-        active && styles.sectionButtonActive,
+        {
+          backgroundColor: active
+            ? colors.primary
+            : colors.surface,
+          borderColor: active
+            ? colors.primary
+            : colors.border,
+        },
       ]}
     >
       <Ionicons
         name={icon}
         size={17}
-        color={active ? "#FFFFFF" : MUTED}
+        color={active ? "#FFFFFF" : colors.muted}
       />
+
       <Text
         style={[
           styles.sectionButtonText,
-          active && styles.sectionButtonTextActive,
+          {
+            color: active ? "#FFFFFF" : colors.text,
+          },
         ]}
       >
         {label}
@@ -125,21 +152,9 @@ export default function SettingsScreen() {
   const { user, updateUser } = useAuth();
   const params = useLocalSearchParams<{ section?: string }>();
 
+  const { theme, setTheme, colors, isDark } = useAppTheme();
+
   const [section, setSection] = useState<Section>("profile");
-
-
-
-useEffect(() => {
-  const requestedSection = params.section;
-
-  if (
-    requestedSection === "profile" ||
-    requestedSection === "appearance" ||
-    requestedSection === "company"
-  ) {
-    setSection(requestedSection);
-  }
-}, [params.section]);
 
   const [name, setName] = useState(user?.name || "");
   const [title, setTitle] = useState(
@@ -160,12 +175,28 @@ useEffect(() => {
   const [companyLoading, setCompanyLoading] = useState(false);
   const [companyError, setCompanyError] = useState("");
 
-  const [theme, setTheme] = useState<ThemeChoice>("light");
-
   const [refreshing, setRefreshing] = useState(false);
 
   const brandId = user?.brandId;
   const accountId = user?.id;
+
+  useEffect(() => {
+    const requestedSection = params.section;
+
+    if (
+      requestedSection === "profile" ||
+      requestedSection === "appearance" ||
+      requestedSection === "company"
+    ) {
+      setSection(requestedSection);
+    }
+  }, [params.section]);
+
+  useEffect(() => {
+    setName(user?.name || "");
+    setTitle(typeof user?.title === "string" ? user.title : "");
+    setPhone(typeof user?.phone === "string" ? user.phone : "");
+  }, [user]);
 
   const loadCompany = useCallback(async () => {
     if (!brandId) {
@@ -196,20 +227,16 @@ useEffect(() => {
     }
   }, [section, loadCompany]);
 
-  useEffect(() => {
-    setName(user?.name || "");
-    setTitle(typeof user?.title === "string" ? user.title : "");
-    setPhone(typeof user?.phone === "string" ? user.phone : "");
-  }, [user]);
-
   const handleRefresh = async () => {
     setRefreshing(true);
 
-    if (section === "company") {
-      await loadCompany();
+    try {
+      if (section === "company") {
+        await loadCompany();
+      }
+    } finally {
+      setRefreshing(false);
     }
-
-    setRefreshing(false);
   };
 
   const handleSaveProfile = async () => {
@@ -302,6 +329,17 @@ useEffect(() => {
     }
   };
 
+  const handleThemeChange = async (value: ThemeChoice) => {
+    try {
+      await setTheme(value);
+    } catch {
+      Alert.alert(
+        "Theme update failed",
+        "Unable to save your appearance preference."
+      );
+    }
+  };
+
   const companyLogoUrl =
     company?.hasAvatar && brandId
       ? getCompanyLogoUrl(brandId, company.avatarUpdatedAt)
@@ -318,8 +356,39 @@ useEffect(() => {
     { key: "country", label: "Country" },
   ];
 
+  const themeOptions: {
+    value: ThemeChoice;
+    label: string;
+    description: string;
+    icon: keyof typeof Ionicons.glyphMap;
+  }[] = [
+    {
+      value: "light",
+      label: "Light",
+      description: "A bright and clean appearance",
+      icon: "sunny-outline",
+    },
+    {
+      value: "dark",
+      label: "Dark",
+      description: "A darker appearance",
+      icon: "moon-outline",
+    },
+    {
+      value: "system",
+      label: "System default",
+      description: "Follow your device settings",
+      icon: "phone-portrait-outline",
+    },
+  ];
+
   return (
-    <View style={styles.screen}>
+    <View
+      style={[
+        styles.screen,
+        { backgroundColor: colors.background },
+      ]}
+    >
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
@@ -327,18 +396,31 @@ useEffect(() => {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={handleRefresh}
-            tintColor={NAVY}
+            tintColor={colors.primary}
           />
         }
       >
+        {/* Page heading */}
         <View style={styles.pageHeading}>
-          <Text style={styles.eyebrow}>ACCOUNT</Text>
-          <Text style={styles.pageTitle}>Settings</Text>
-          <Text style={styles.pageDescription}>
+          <Text style={[styles.eyebrow, { color: colors.muted }]}>
+            ACCOUNT
+          </Text>
+
+          <Text style={[styles.pageTitle, { color: colors.text }]}>
+            Settings
+          </Text>
+
+          <Text
+            style={[
+              styles.pageDescription,
+              { color: colors.muted },
+            ]}
+          >
             Manage your profile and company preferences.
           </Text>
         </View>
 
+        {/* Section navigation */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -349,6 +431,7 @@ useEffect(() => {
             label="Profile"
             active={section === "profile"}
             onPress={() => setSection("profile")}
+            colors={colors}
           />
 
           <SectionButton
@@ -356,6 +439,7 @@ useEffect(() => {
             label="Appearance"
             active={section === "appearance"}
             onPress={() => setSection("appearance")}
+            colors={colors}
           />
 
           <SectionButton
@@ -363,33 +447,75 @@ useEffect(() => {
             label="Company"
             active={section === "company"}
             onPress={() => setSection("company")}
+            colors={colors}
           />
         </ScrollView>
 
+        {/* PROFILE */}
         {section === "profile" && (
           <>
-            <View style={styles.card}>
+            <View
+              style={[
+                styles.card,
+                {
+                  backgroundColor: colors.surface,
+                  borderColor: colors.border,
+                },
+              ]}
+            >
               <View style={styles.cardHeading}>
-                <View>
-                  <Text style={styles.cardTitle}>Personal information</Text>
-                  <Text style={styles.cardDescription}>
-                    Update the details associated with your account.
-                  </Text>
-                </View>
+                <Text style={[styles.cardTitle, { color: colors.text }]}>
+                  Personal information
+                </Text>
+
+                <Text
+                  style={[
+                    styles.cardDescription,
+                    { color: colors.muted },
+                  ]}
+                >
+                  Update the details associated with your account.
+                </Text>
               </View>
 
-              <View style={styles.profileIdentity}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>
+              <View
+                style={[
+                  styles.profileIdentity,
+                  { borderBottomColor: colors.border },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.avatar,
+                    { backgroundColor: colors.avatar },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.avatarText,
+                      { color: colors.text },
+                    ]}
+                  >
                     {getInitials(name)}
                   </Text>
                 </View>
 
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.identityName}>
+                  <Text
+                    style={[
+                      styles.identityName,
+                      { color: colors.text },
+                    ]}
+                  >
                     {name || "Your name"}
                   </Text>
-                  <Text style={styles.identityEmail}>
+
+                  <Text
+                    style={[
+                      styles.identityEmail,
+                      { color: colors.muted },
+                    ]}
+                  >
                     {user?.email || "No email available"}
                   </Text>
                 </View>
@@ -400,6 +526,7 @@ useEffect(() => {
                 value={name}
                 onChangeText={setName}
                 placeholder="Enter your name"
+                colors={colors}
               />
 
               <Field
@@ -407,6 +534,7 @@ useEffect(() => {
                 value={title}
                 onChangeText={setTitle}
                 placeholder="e.g. Marketing Manager"
+                colors={colors}
               />
 
               <Field
@@ -415,17 +543,22 @@ useEffect(() => {
                 onChangeText={setPhone}
                 placeholder="Enter phone number"
                 keyboardType="phone-pad"
+                colors={colors}
               />
 
               <Field
                 label="Email address"
                 value={user?.email || ""}
                 editable={false}
+                colors={colors}
               />
 
               <TouchableOpacity
                 activeOpacity={0.85}
-                style={styles.primaryButton}
+                style={[
+                  styles.primaryButton,
+                  { backgroundColor: colors.primary },
+                ]}
                 onPress={handleSaveProfile}
                 disabled={savingProfile}
               >
@@ -446,9 +579,26 @@ useEffect(() => {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Change password</Text>
-              <Text style={styles.cardDescription}>
+            {/* Change password */}
+            <View
+              style={[
+                styles.card,
+                {
+                  backgroundColor: colors.surface,
+                  borderColor: colors.border,
+                },
+              ]}
+            >
+              <Text style={[styles.cardTitle, { color: colors.text }]}>
+                Change password
+              </Text>
+
+              <Text
+                style={[
+                  styles.cardDescription,
+                  { color: colors.muted },
+                ]}
+              >
                 Use your current password to set a new one.
               </Text>
 
@@ -457,6 +607,7 @@ useEffect(() => {
                 value={currentPassword}
                 onChangeText={setCurrentPassword}
                 placeholder="Enter current password"
+                colors={colors}
               />
 
               <Field
@@ -464,6 +615,7 @@ useEffect(() => {
                 value={newPassword}
                 onChangeText={setNewPassword}
                 placeholder="At least 8 characters"
+                colors={colors}
               />
 
               <Field
@@ -471,18 +623,27 @@ useEffect(() => {
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 placeholder="Re-enter new password"
+                colors={colors}
               />
 
               <TouchableOpacity
                 activeOpacity={0.85}
-                style={styles.secondaryButton}
+                style={[
+                  styles.secondaryButton,
+                  { backgroundColor: colors.buttonSecondary },
+                ]}
                 onPress={handleChangePassword}
                 disabled={savingPassword}
               >
                 {savingPassword ? (
-                  <ActivityIndicator color={NAVY} />
+                  <ActivityIndicator color={colors.text} />
                 ) : (
-                  <Text style={styles.secondaryButtonText}>
+                  <Text
+                    style={[
+                      styles.secondaryButtonText,
+                      { color: colors.buttonSecondaryText },
+                    ]}
+                  >
                     Update password
                   </Text>
                 )}
@@ -491,60 +652,79 @@ useEffect(() => {
           </>
         )}
 
+        {/* APPEARANCE */}
         {section === "appearance" && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Appearance</Text>
-            <Text style={styles.cardDescription}>
+          <View
+            style={[
+              styles.card,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Text style={[styles.cardTitle, { color: colors.text }]}>
+              Appearance
+            </Text>
+
+            <Text
+              style={[
+                styles.cardDescription,
+                { color: colors.muted },
+              ]}
+            >
               Choose how the mobile app should look.
             </Text>
 
-            {(
-              [
-                {
-                  value: "light",
-                  label: "Light",
-                  description: "A bright and clean appearance",
-                  icon: "sunny-outline",
-                },
-                {
-                  value: "dark",
-                  label: "Dark",
-                  description: "A darker appearance",
-                  icon: "moon-outline",
-                },
-                {
-                  value: "system",
-                  label: "System default",
-                  description: "Follow your device settings",
-                  icon: "phone-portrait-outline",
-                },
-              ] as const
-            ).map((option) => {
+            {themeOptions.map((option) => {
               const selected = theme === option.value;
 
               return (
                 <TouchableOpacity
                   key={option.value}
                   activeOpacity={0.8}
-                  onPress={() => setTheme(option.value)}
+                  onPress={() => handleThemeChange(option.value)}
                   style={[
                     styles.themeOption,
-                    selected && styles.themeOptionSelected,
+                    {
+                      backgroundColor: selected
+                        ? colors.selected
+                        : colors.surface,
+                      borderColor: selected
+                        ? colors.primary
+                        : colors.border,
+                    },
                   ]}
                 >
-                  <View style={styles.themeIcon}>
+                  <View
+                    style={[
+                      styles.themeIcon,
+                      { backgroundColor: colors.surfaceSecondary },
+                    ]}
+                  >
                     <Ionicons
                       name={option.icon}
                       size={21}
-                      color={NAVY}
+                      color={colors.primary}
                     />
                   </View>
 
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.themeLabel}>
+                    <Text
+                      style={[
+                        styles.themeLabel,
+                        { color: colors.text },
+                      ]}
+                    >
                       {option.label}
                     </Text>
-                    <Text style={styles.themeDescription}>
+
+                    <Text
+                      style={[
+                        styles.themeDescription,
+                        { color: colors.muted },
+                      ]}
+                    >
                       {option.description}
                     </Text>
                   </View>
@@ -556,31 +736,86 @@ useEffect(() => {
                         : "radio-button-off"
                     }
                     size={21}
-                    color={selected ? NAVY : "#B6BBC4"}
+                    color={
+                      selected ? colors.primary : colors.muted
+                    }
                   />
                 </TouchableOpacity>
               );
             })}
 
-            <Text style={styles.appearanceNote}>
-              Theme selection is currently a screen-level preference.
-              App-wide theme persistence will be connected when the
-              shared theme provider is added.
+            <View
+              style={[
+                styles.themeStatus,
+                { backgroundColor: colors.surfaceSecondary },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={17}
+                color={colors.primary}
+              />
+
+              <Text
+                style={[
+                  styles.themeStatusText,
+                  { color: colors.text },
+                ]}
+              >
+                {theme === "system"
+                  ? `Following system appearance (${isDark ? "Dark" : "Light"})`
+                  : `${theme === "dark" ? "Dark" : "Light"} appearance enabled`}
+              </Text>
+            </View>
+
+            <Text
+              style={[
+                styles.appearanceNote,
+                { color: colors.muted },
+              ]}
+            >
+              Your appearance preference is saved automatically and
+              will be remembered next time you open the app.
             </Text>
           </View>
         )}
 
+        {/* COMPANY */}
         {section === "company" && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Company information</Text>
-            <Text style={styles.cardDescription}>
+          <View
+            style={[
+              styles.card,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Text style={[styles.cardTitle, { color: colors.text }]}>
+              Company information
+            </Text>
+
+            <Text
+              style={[
+                styles.cardDescription,
+                { color: colors.muted },
+              ]}
+            >
               Your organisation's details linked to this portal account.
             </Text>
 
             {companyLoading ? (
               <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={NAVY} />
-                <Text style={styles.loadingText}>
+                <ActivityIndicator
+                  size="large"
+                  color={colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.loadingText,
+                    { color: colors.muted },
+                  ]}
+                >
                   Loading company details...
                 </Text>
               </View>
@@ -589,53 +824,115 @@ useEffect(() => {
                 <Ionicons
                   name="alert-circle-outline"
                   size={25}
-                  color="#C65A52"
+                  color={colors.danger}
                 />
-                <Text style={styles.errorText}>{companyError}</Text>
+
+                <Text
+                  style={[
+                    styles.errorText,
+                    { color: colors.danger },
+                  ]}
+                >
+                  {companyError}
+                </Text>
+
                 <TouchableOpacity onPress={loadCompany}>
-                  <Text style={styles.retryText}>Try again</Text>
+                  <Text
+                    style={[
+                      styles.retryText,
+                      { color: colors.primary },
+                    ]}
+                  >
+                    Try again
+                  </Text>
                 </TouchableOpacity>
               </View>
             ) : company ? (
               <>
-                <View style={styles.companyIdentity}>
+                <View
+                  style={[
+                    styles.companyIdentity,
+                    { borderBottomColor: colors.border },
+                  ]}
+                >
                   {companyLogoUrl ? (
                     <Image
                       source={{ uri: companyLogoUrl }}
-                      style={styles.companyLogo}
+                      style={[
+                        styles.companyLogo,
+                        {
+                          backgroundColor: colors.surface,
+                          borderColor: colors.border,
+                        },
+                      ]}
                       resizeMode="contain"
                     />
                   ) : (
-                    <View style={styles.companyLogoPlaceholder}>
+                    <View
+                      style={[
+                        styles.companyLogoPlaceholder,
+                        { backgroundColor: colors.surfaceSecondary },
+                      ]}
+                    >
                       <Ionicons
                         name="business-outline"
                         size={29}
-                        color={NAVY}
+                        color={colors.primary}
                       />
                     </View>
                   )}
 
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.companyName}>
+                    <Text
+                      style={[
+                        styles.companyName,
+                        { color: colors.text },
+                      ]}
+                    >
                       {company.name || user?.clientName || "Company"}
                     </Text>
-                    <Text style={styles.companySubtitle}>
+
+                    <Text
+                      style={[
+                        styles.companySubtitle,
+                        { color: colors.muted },
+                      ]}
+                    >
                       Connected client organisation
                     </Text>
                   </View>
                 </View>
 
                 {companyFields.map((field) => {
-                  const value = displayValue(company[field.key]);
+                  const value = displayValue(
+                    company[field.key as keyof PortalClient]
+                  );
 
                   if (!value || field.key === "name") return null;
 
                   return (
-                    <View key={field.key} style={styles.companyField}>
-                      <Text style={styles.companyFieldLabel}>
+                    <View
+                      key={field.key}
+                      style={[
+                        styles.companyField,
+                        { borderBottomColor: colors.border },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.companyFieldLabel,
+                          { color: colors.muted },
+                        ]}
+                      >
                         {field.label}
                       </Text>
-                      <Text style={styles.companyFieldValue}>
+
+                      <Text
+                        style={[
+                          styles.companyFieldValue,
+                          { color: colors.text },
+                        ]}
+                      >
                         {value}
                       </Text>
                     </View>
@@ -646,22 +943,38 @@ useEffect(() => {
                   <Ionicons
                     name="lock-closed-outline"
                     size={15}
-                    color={MUTED}
+                    color={colors.muted}
                   />
-                  <Text style={styles.readOnlyText}>
+
+                  <Text
+                    style={[
+                      styles.readOnlyText,
+                      { color: colors.muted },
+                    ]}
+                  >
                     Company details are managed by Fifth Avenue.
                   </Text>
                 </View>
               </>
             ) : (
-              <Text style={styles.loadingText}>
+              <Text
+                style={[
+                  styles.loadingText,
+                  { color: colors.muted },
+                ]}
+              >
                 No company information available.
               </Text>
             )}
           </View>
         )}
 
-        <Text style={styles.footerText}>
+        <Text
+          style={[
+            styles.footerText,
+            { color: colors.muted },
+          ]}
+        >
           Fifth Avenue Client Portal
         </Text>
       </ScrollView>
@@ -672,85 +985,79 @@ useEffect(() => {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#F8F7F4",
   },
+
   content: {
     paddingHorizontal: 20,
     paddingTop: 25,
     paddingBottom: 40,
   },
+
   pageHeading: {
     marginBottom: 22,
   },
+
   eyebrow: {
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 2,
-    color: "#9298A3",
     marginBottom: 7,
   },
+
   pageTitle: {
     fontSize: 29,
     fontWeight: "700",
-    color: NAVY,
     letterSpacing: -0.7,
   },
+
   pageDescription: {
     fontSize: 13,
-    color: MUTED,
     marginTop: 6,
   },
-  sectionNavigation: {
-  gap: 10,
-  paddingBottom: 14,
-},
 
-sectionButton: {
-  height: 40,
-  paddingHorizontal: 11,
-  borderRadius: 24,
-  backgroundColor: "#FFFFFF",
-  borderWidth: 1,
-  borderColor: BORDER,
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 5,
-},
-  sectionButtonActive: {
-    backgroundColor: NAVY,
-    borderColor: NAVY,
+  sectionNavigation: {
+    gap: 10,
+    paddingBottom: 14,
   },
+
+  sectionButton: {
+    height: 40,
+    paddingHorizontal: 11,
+    borderRadius: 24,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+
   sectionButtonText: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#697181",
   },
-  sectionButtonTextActive: {
-    color: "#FFFFFF",
-  },
+
   card: {
-    backgroundColor: "#FFFFFF",
     borderRadius: 19,
     padding: 19,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: "#F0F0F0",
   },
+
   cardHeading: {
     marginBottom: 17,
   },
+
   cardTitle: {
     fontSize: 16,
     fontWeight: "700",
-    color: NAVY,
   },
+
   cardDescription: {
     fontSize: 12,
-    color: MUTED,
     lineHeight: 18,
     marginTop: 6,
     marginBottom: 18,
   },
+
   profileIdentity: {
     flexDirection: "row",
     alignItems: "center",
@@ -758,121 +1065,128 @@ sectionButton: {
     paddingBottom: 19,
     marginBottom: 5,
     borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
   },
+
   avatar: {
     width: 53,
     height: 53,
     borderRadius: 27,
-    backgroundColor: "#E8ECF4",
     alignItems: "center",
     justifyContent: "center",
   },
+
   avatarText: {
     fontSize: 17,
     fontWeight: "700",
-    color: NAVY,
   },
+
   identityName: {
     fontSize: 15,
     fontWeight: "700",
-    color: NAVY,
   },
+
   identityEmail: {
     fontSize: 12,
-    color: MUTED,
     marginTop: 4,
   },
+
   field: {
     marginTop: 15,
   },
+
   fieldLabel: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#555E6D",
     marginBottom: 8,
   },
+
   input: {
     height: 47,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: BORDER,
     paddingHorizontal: 13,
     fontSize: 13,
-    color: NAVY,
-    backgroundColor: "#FFFFFF",
   },
-  readOnlyInput: {
-    backgroundColor: "#F6F6F7",
-    color: "#8B919C",
-  },
+
   primaryButton: {
     height: 48,
     borderRadius: 11,
-    backgroundColor: NAVY,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 9,
     marginTop: 22,
   },
+
   primaryButtonText: {
     fontSize: 13,
     color: "#FFFFFF",
     fontWeight: "700",
   },
+
   secondaryButton: {
     height: 46,
     borderRadius: 11,
-    backgroundColor: "#F0F2F6",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 21,
   },
+
   secondaryButtonText: {
     fontSize: 13,
     fontWeight: "700",
-    color: NAVY,
   },
+
   themeOption: {
     minHeight: 75,
     borderRadius: 13,
     borderWidth: 1,
-    borderColor: BORDER,
     padding: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     marginBottom: 10,
   },
-  themeOptionSelected: {
-    borderColor: NAVY,
-    backgroundColor: "#F5F7FA",
-  },
+
   themeIcon: {
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: "#EDF0F5",
     alignItems: "center",
     justifyContent: "center",
   },
+
   themeLabel: {
     fontSize: 13,
     fontWeight: "700",
-    color: NAVY,
   },
+
   themeDescription: {
     fontSize: 11,
-    color: MUTED,
     marginTop: 4,
   },
+
+  themeStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 12,
+    borderRadius: 11,
+    marginTop: 7,
+  },
+
+  themeStatusText: {
+    fontSize: 11,
+    fontWeight: "600",
+    flex: 1,
+  },
+
   appearanceNote: {
     fontSize: 11,
     lineHeight: 17,
-    color: MUTED,
-    marginTop: 8,
+    marginTop: 12,
   },
+
   companyIdentity: {
     flexDirection: "row",
     alignItems: "center",
@@ -880,90 +1194,91 @@ sectionButton: {
     paddingBottom: 20,
     marginBottom: 5,
     borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
   },
+
   companyLogo: {
     width: 58,
     height: 58,
     borderRadius: 13,
-    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: BORDER,
   },
+
   companyLogoPlaceholder: {
     width: 58,
     height: 58,
     borderRadius: 13,
-    backgroundColor: "#EDF0F5",
     alignItems: "center",
     justifyContent: "center",
   },
+
   companyName: {
     fontSize: 16,
     fontWeight: "700",
-    color: NAVY,
   },
+
   companySubtitle: {
     fontSize: 11,
-    color: MUTED,
     marginTop: 5,
   },
+
   companyField: {
     paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: "#F1F1F2",
   },
+
   companyFieldLabel: {
     fontSize: 11,
-    color: MUTED,
     marginBottom: 5,
   },
+
   companyFieldValue: {
     fontSize: 13,
     fontWeight: "600",
-    color: NAVY,
   },
+
   readOnlyNotice: {
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
     marginTop: 17,
   },
+
   readOnlyText: {
     fontSize: 11,
-    color: MUTED,
     flex: 1,
   },
+
   loadingContainer: {
     minHeight: 150,
     alignItems: "center",
     justifyContent: "center",
     gap: 12,
   },
+
   loadingText: {
     fontSize: 12,
-    color: MUTED,
     textAlign: "center",
   },
+
   errorContainer: {
     minHeight: 140,
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
   },
+
   errorText: {
     fontSize: 12,
-    color: "#A94E48",
     textAlign: "center",
   },
+
   retryText: {
     fontSize: 13,
     fontWeight: "700",
-    color: NAVY,
   },
+
   footerText: {
     textAlign: "center",
-    color: "#A2A6AE",
     fontSize: 10,
     marginTop: 9,
   },
