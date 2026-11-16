@@ -1,18 +1,18 @@
 {
   "expo": {
-    "name": "5th-avenue-client-mobile-app",
+    "name": "Fifth Avenue",
     "slug": "5th-avenue-client-mobile-app",
     "version": "1.0.0",
     "scheme": "fifthavenue",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#00001C",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -24,7 +24,16 @@
     },
     "plugins": [
       "expo-router",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#00001C",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160
+        }
+      ]
     ]
   }
 }

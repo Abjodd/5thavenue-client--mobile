@@ -1,37 +1,38 @@
 import React, { useCallback, useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  Image,
-  Alert,
-  RefreshControl,
-} from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { Alert, Image, Platform, StyleSheet, TextInput, View } from "react-native";
+import Animated, { FadeIn } from "react-native-reanimated";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { useAuth } from "../../src/context/AuthContext";
 import {
   changePortalPassword,
   getCompanyLogoUrl,
+  getPortalAvatarUrl,
   getPortalClient,
   updatePortalProfile,
   PortalClient,
 } from "../../src/lib/api";
-
+import { useAppTheme, ThemeChoice } from "../../src/context/ThemeContext";
 import {
-  useAppTheme,
-  ThemeChoice,
-} from "../../src/context/ThemeContext";
+  Button,
+  Card,
+  EmptyState,
+  Hairline,
+  Reveal,
+  ScreenScroll,
+  Segmented,
+  Skeleton,
+  T,
+  Tap,
+  notify,
+} from "../../src/ui/primitives";
+import { fonts, palettes, radius, space } from "../../src/ui/theme";
 
 type Section = "profile" | "appearance" | "company";
 
 function getInitials(name?: string) {
-  return (name || "Client")
+  return (name || "You")
     .trim()
     .split(/\s+/)
     .slice(0, 2)
@@ -48,7 +49,10 @@ function displayValue(value: unknown): string {
   return "";
 }
 
-// Reusable input field
+// ---------------------------------------------------------------------------
+// Pieces
+// ---------------------------------------------------------------------------
+
 function Field({
   label,
   value,
@@ -56,7 +60,7 @@ function Field({
   placeholder,
   keyboardType = "default",
   editable = true,
-  colors,
+  secure,
 }: {
   label: string;
   value: string;
@@ -64,89 +68,91 @@ function Field({
   placeholder?: string;
   keyboardType?: "default" | "email-address" | "phone-pad";
   editable?: boolean;
-  colors: ReturnType<typeof useAppTheme>["colors"];
+  secure?: boolean;
 }) {
+  const { colors } = useAppTheme();
+  const [focused, setFocused] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   return (
-    <View style={styles.field}>
-      <Text style={[styles.fieldLabel, { color: colors.fieldLabel }]}>
+    <View style={{ gap: 6 }}>
+      <T v="label" tone="muted">
         {label}
-      </Text>
-
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder || label}
-        placeholderTextColor={colors.placeholder}
-        keyboardType={keyboardType}
-        editable={editable}
-        autoCapitalize="none"
-        secureTextEntry={label.toLowerCase().includes("password")}
+      </T>
+      <View
         style={[
-          styles.input,
+          styles.field,
           {
-            backgroundColor: editable
-              ? colors.input
-              : colors.disabled,
-            borderColor: colors.border,
-            color: editable
-              ? colors.inputText
-              : colors.disabledText,
+            backgroundColor: editable ? colors.input : colors.well,
+            borderColor: focused ? colors.accent : colors.borderStrong,
+            borderWidth: focused ? 1.5 : 1,
           },
         ]}
-      />
+      >
+        <TextInput
+          accessibilityLabel={label}
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder || label}
+          placeholderTextColor={colors.faint}
+          selectionColor={colors.accent}
+          keyboardType={keyboardType}
+          editable={editable}
+          autoCapitalize="none"
+          secureTextEntry={secure && !revealed}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          style={[styles.input, { color: editable ? colors.text : colors.muted }]}
+        />
+        {secure ? (
+          <Tap
+            accessibilityRole="button"
+            accessibilityLabel={revealed ? `Hide ${label}` : `Show ${label}`}
+            onPress={() => setRevealed(!revealed)}
+            hitSlop={10}
+          >
+            <Ionicons
+              name={revealed ? "eye-off-outline" : "eye-outline"}
+              size={19}
+              color={colors.icon}
+            />
+          </Tap>
+        ) : !editable ? (
+          <Ionicons name="lock-closed-outline" size={15} color={colors.faint} />
+        ) : null}
+      </View>
     </View>
   );
 }
 
-// Reusable section navigation button
-function SectionButton({
-  icon,
-  label,
-  active,
-  onPress,
-  colors,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  active: boolean;
-  onPress: () => void;
-  colors: ReturnType<typeof useAppTheme>["colors"];
-}) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.8}
-      style={[
-        styles.sectionButton,
-        {
-          backgroundColor: active
-            ? colors.primary
-            : colors.surface,
-          borderColor: active
-            ? colors.primary
-            : colors.border,
-        },
-      ]}
-    >
-      <Ionicons
-        name={icon}
-        size={17}
-        color={active ? "#FFFFFF" : colors.muted}
+/** A miniature screen drawn in the palette each appearance option would use. */
+function ThemePreview({ choice }: { choice: ThemeChoice }) {
+  const half = (palette: (typeof palettes)["light"], key: string) => (
+    <View key={key} style={{ flex: 1, backgroundColor: palette.background, padding: 6, gap: 4 }}>
+      <View style={{ height: 5, width: "70%", borderRadius: 3, backgroundColor: palette.text }} />
+      <View
+        style={{
+          flex: 1,
+          borderRadius: 5,
+          backgroundColor: palette.surface,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: palette.borderStrong,
+        }}
       />
-
-      <Text
-        style={[
-          styles.sectionButtonText,
-          {
-            color: active ? "#FFFFFF" : colors.text,
-          },
-        ]}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: palette.accent }} />
+    </View>
+  );
+  return (
+    <View style={styles.preview}>
+      {choice === "system"
+        ? [half(palettes.light, "l"), half(palettes.dark, "d")]
+        : half(palettes[choice], choice)}
+    </View>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
 
 export default function SettingsScreen() {
   const { user, updateUser } = useAuth();
@@ -342,7 +348,7 @@ export default function SettingsScreen() {
 
   const companyLogoUrl =
     company?.hasAvatar && brandId
-      ? getCompanyLogoUrl(brandId, company.avatarUpdatedAt)
+      ? getCompanyLogoUrl(brandId, company.avatarUpdatedAt as string | null | undefined)
       : null;
 
   const companyFields = [
@@ -382,904 +388,300 @@ export default function SettingsScreen() {
     },
   ];
 
+  const { signOut } = useAuth();
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  const avatarUrl =
+    user?.id && user.hasAvatar === true
+      ? getPortalAvatarUrl(user.id, user.avatarUpdatedAt)
+      : typeof user?.avatar === "string"
+        ? user.avatar
+        : null;
+
   return (
-    <View
-      style={[
-        styles.screen,
-        { backgroundColor: colors.background },
-      ]}
+    <ScreenScroll
+      refreshing={refreshing}
+      onRefresh={handleRefresh}
+      automaticallyAdjustKeyboardInsets
     >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            tintColor={colors.primary}
+      <Reveal style={styles.identity}>
+        {avatarUrl && !avatarFailed ? (
+          <Image
+            source={{ uri: avatarUrl }}
+            style={styles.avatar}
+            onError={() => setAvatarFailed(true)}
           />
-        }
-      >
-        {/* Page heading */}
-        <View style={styles.pageHeading}>
-          <Text style={[styles.eyebrow, { color: colors.muted }]}>
-            ACCOUNT
-          </Text>
-
-          <Text style={[styles.pageTitle, { color: colors.text }]}>
-            Settings
-          </Text>
-
-          <Text
-            style={[
-              styles.pageDescription,
-              { color: colors.muted },
-            ]}
-          >
-            Manage your profile and company preferences.
-          </Text>
-        </View>
-
-        {/* Section navigation */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.sectionNavigation}
-        >
-          <SectionButton
-            icon="person-outline"
-            label="Profile"
-            active={section === "profile"}
-            onPress={() => setSection("profile")}
-            colors={colors}
-          />
-
-          <SectionButton
-            icon="contrast-outline"
-            label="Appearance"
-            active={section === "appearance"}
-            onPress={() => setSection("appearance")}
-            colors={colors}
-          />
-
-          <SectionButton
-            icon="business-outline"
-            label="Company"
-            active={section === "company"}
-            onPress={() => setSection("company")}
-            colors={colors}
-          />
-        </ScrollView>
-
-        {/* PROFILE */}
-        {section === "profile" && (
-          <>
-            <View
-              style={[
-                styles.card,
-                {
-                  backgroundColor: colors.surface,
-                  borderColor: colors.border,
-                },
-              ]}
-            >
-              <View style={styles.cardHeading}>
-                <Text style={[styles.cardTitle, { color: colors.text }]}>
-                  Personal information
-                </Text>
-
-                <Text
-                  style={[
-                    styles.cardDescription,
-                    { color: colors.muted },
-                  ]}
-                >
-                  Update the details associated with your account.
-                </Text>
-              </View>
-
-              <View
-                style={[
-                  styles.profileIdentity,
-                  { borderBottomColor: colors.border },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.avatar,
-                    { backgroundColor: colors.avatar },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.avatarText,
-                      { color: colors.text },
-                    ]}
-                  >
-                    {getInitials(name)}
-                  </Text>
-                </View>
-
-                <View style={{ flex: 1 }}>
-                  <Text
-                    style={[
-                      styles.identityName,
-                      { color: colors.text },
-                    ]}
-                  >
-                    {name || "Your name"}
-                  </Text>
-
-                  <Text
-                    style={[
-                      styles.identityEmail,
-                      { color: colors.muted },
-                    ]}
-                  >
-                    {user?.email || "No email available"}
-                  </Text>
-                </View>
-              </View>
-
-              <Field
-                label="Full name"
-                value={name}
-                onChangeText={setName}
-                placeholder="Enter your name"
-                colors={colors}
-              />
-
-              <Field
-                label="Designation"
-                value={title}
-                onChangeText={setTitle}
-                placeholder="e.g. Marketing Manager"
-                colors={colors}
-              />
-
-              <Field
-                label="Phone number"
-                value={phone}
-                onChangeText={setPhone}
-                placeholder="Enter phone number"
-                keyboardType="phone-pad"
-                colors={colors}
-              />
-
-              <Field
-                label="Email address"
-                value={user?.email || ""}
-                editable={false}
-                colors={colors}
-              />
-
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.primaryButton,
-                  { backgroundColor: colors.primary },
-                ]}
-                onPress={handleSaveProfile}
-                disabled={savingProfile}
-              >
-                {savingProfile ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Text style={styles.primaryButtonText}>
-                      Save changes
-                    </Text>
-                    <Ionicons
-                      name="arrow-forward"
-                      size={17}
-                      color="#FFFFFF"
-                    />
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-
-            {/* Change password */}
-            <View
-              style={[
-                styles.card,
-                {
-                  backgroundColor: colors.surface,
-                  borderColor: colors.border,
-                },
-              ]}
-            >
-              <Text style={[styles.cardTitle, { color: colors.text }]}>
-                Change password
-              </Text>
-
-              <Text
-                style={[
-                  styles.cardDescription,
-                  { color: colors.muted },
-                ]}
-              >
-                Use your current password to set a new one.
-              </Text>
-
-              <Field
-                label="Current password"
-                value={currentPassword}
-                onChangeText={setCurrentPassword}
-                placeholder="Enter current password"
-                colors={colors}
-              />
-
-              <Field
-                label="New password"
-                value={newPassword}
-                onChangeText={setNewPassword}
-                placeholder="At least 8 characters"
-                colors={colors}
-              />
-
-              <Field
-                label="Confirm new password"
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                placeholder="Re-enter new password"
-                colors={colors}
-              />
-
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.secondaryButton,
-                  { backgroundColor: colors.buttonSecondary },
-                ]}
-                onPress={handleChangePassword}
-                disabled={savingPassword}
-              >
-                {savingPassword ? (
-                  <ActivityIndicator color={colors.text} />
-                ) : (
-                  <Text
-                    style={[
-                      styles.secondaryButtonText,
-                      { color: colors.buttonSecondaryText },
-                    ]}
-                  >
-                    Update password
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </>
+        ) : (
+          <View style={[styles.avatar, styles.center, { backgroundColor: colors.accent }]}>
+            <T style={{ fontFamily: fonts.serifMedium, fontSize: 26, lineHeight: 32 }} color={colors.onAccent}>
+              {getInitials(name)}
+            </T>
+          </View>
         )}
+        <View style={{ flex: 1 }}>
+          <T v="title" numberOfLines={1} adjustsFontSizeToFit>
+            {name || "Your name"}
+          </T>
+          <T tone="muted" numberOfLines={1}>
+            {user?.email || "No email on file"}
+          </T>
+        </View>
+      </Reveal>
 
-        {/* APPEARANCE */}
-        {section === "appearance" && (
-          <View
-            style={[
-              styles.card,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>
-              Appearance
-            </Text>
+      <Reveal index={1}>
+        <Segmented
+          value={section}
+          onChange={setSection}
+          options={[
+            { value: "profile", label: "Profile" },
+            { value: "appearance", label: "Appearance" },
+            { value: "company", label: "Company" },
+          ]}
+        />
+      </Reveal>
 
-            <Text
-              style={[
-                styles.cardDescription,
-                { color: colors.muted },
-              ]}
-            >
-              Choose how the mobile app should look.
-            </Text>
+      {section === "profile" ? (
+        <Animated.View key="profile" entering={FadeIn.duration(260)} style={styles.gap}>
+          <Card style={styles.gap}>
+            <View>
+              <T v="heading">Personal information</T>
+              <T v="caption" tone="faint">
+                How you appear to the Fifth Avenue team
+              </T>
+            </View>
+            <Field label="Full name" value={name} onChangeText={setName} placeholder="Your name" />
+            <Field
+              label="Designation"
+              value={title}
+              onChangeText={setTitle}
+              placeholder="For example, Marketing Manager"
+            />
+            <Field
+              label="Phone number"
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="Your phone number"
+              keyboardType="phone-pad"
+            />
+            <Field label="Email address" value={user?.email || ""} editable={false} />
+            <Button
+              label="Save changes"
+              icon="checkmark"
+              loading={savingProfile}
+              onPress={handleSaveProfile}
+            />
+          </Card>
 
+          <Card style={styles.gap}>
+            <View>
+              <T v="heading">Change password</T>
+              <T v="caption" tone="faint">
+                You need your current password to set a new one
+              </T>
+            </View>
+            <Field
+              secure
+              label="Current password"
+              value={currentPassword}
+              onChangeText={setCurrentPassword}
+              placeholder="Your current password"
+            />
+            <Field
+              secure
+              label="New password"
+              value={newPassword}
+              onChangeText={setNewPassword}
+              placeholder="At least 8 characters"
+            />
+            <Field
+              secure
+              label="Confirm new password"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              placeholder="The new password again"
+            />
+            <Button
+              kind="ghost"
+              label="Update password"
+              loading={savingPassword}
+              onPress={handleChangePassword}
+            />
+          </Card>
+
+          <Button
+            kind="danger"
+            label="Sign out"
+            icon="log-out-outline"
+            onPress={() => {
+              signOut();
+              router.replace("/");
+            }}
+          />
+        </Animated.View>
+      ) : null}
+
+      {section === "appearance" ? (
+        <Animated.View key="appearance" entering={FadeIn.duration(260)} style={styles.gap}>
+          <View style={{ flexDirection: "row", gap: space.md }}>
             {themeOptions.map((option) => {
               const selected = theme === option.value;
-
               return (
-                <TouchableOpacity
+                <Tap
                   key={option.value}
-                  activeOpacity={0.8}
-                  onPress={() => handleThemeChange(option.value)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${option.label}. ${option.description}`}
+                  onPress={() => {
+                    notify("success");
+                    handleThemeChange(option.value);
+                  }}
+                  haptic={false}
                   style={[
                     styles.themeOption,
                     {
-                      backgroundColor: selected
-                        ? colors.selected
-                        : colors.surface,
-                      borderColor: selected
-                        ? colors.primary
-                        : colors.border,
+                      backgroundColor: colors.surface,
+                      borderColor: selected ? colors.accent : colors.border,
+                      borderWidth: selected ? 2 : 1,
                     },
                   ]}
                 >
-                  <View
-                    style={[
-                      styles.themeIcon,
-                      { backgroundColor: colors.surfaceSecondary },
-                    ]}
-                  >
+                  <ThemePreview choice={option.value} />
+                  <View style={styles.themeLabel}>
                     <Ionicons
-                      name={option.icon}
-                      size={21}
-                      color={colors.primary}
+                      name={selected ? "checkmark-circle" : option.icon}
+                      size={15}
+                      color={selected ? colors.accent : colors.muted}
                     />
+                    <T v="label" numberOfLines={1}>
+                      {option.value === "system" ? "System" : option.label}
+                    </T>
                   </View>
-
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        styles.themeLabel,
-                        { color: colors.text },
-                      ]}
-                    >
-                      {option.label}
-                    </Text>
-
-                    <Text
-                      style={[
-                        styles.themeDescription,
-                        { color: colors.muted },
-                      ]}
-                    >
-                      {option.description}
-                    </Text>
-                  </View>
-
-                  <Ionicons
-                    name={
-                      selected
-                        ? "radio-button-on"
-                        : "radio-button-off"
-                    }
-                    size={21}
-                    color={
-                      selected ? colors.primary : colors.muted
-                    }
-                  />
-                </TouchableOpacity>
+                </Tap>
               );
             })}
-
-            <View
-              style={[
-                styles.themeStatus,
-                { backgroundColor: colors.surfaceSecondary },
-              ]}
-            >
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={17}
-                color={colors.primary}
-              />
-
-              <Text
-                style={[
-                  styles.themeStatusText,
-                  { color: colors.text },
-                ]}
-              >
-                {theme === "system"
-                  ? `Following system appearance (${isDark ? "Dark" : "Light"})`
-                  : `${theme === "dark" ? "Dark" : "Light"} appearance enabled`}
-              </Text>
-            </View>
-
-            <Text
-              style={[
-                styles.appearanceNote,
-                { color: colors.muted },
-              ]}
-            >
-              Your appearance preference is saved automatically and
-              will be remembered next time you open the app.
-            </Text>
           </View>
-        )}
 
-        {/* COMPANY */}
-        {section === "company" && (
-          <View
-            style={[
-              styles.card,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>
-              Company information
-            </Text>
+          <T tone="muted">
+            {theme === "system"
+              ? `Following your device, which is set to ${isDark ? "dark" : "light"} right now.`
+              : `The ${theme} appearance is on.`}{" "}
+            Your choice is saved and used the next time you open the app.
+          </T>
+        </Animated.View>
+      ) : null}
 
-            <Text
-              style={[
-                styles.cardDescription,
-                { color: colors.muted },
-              ]}
-            >
-              Your organisation's details linked to this portal account.
-            </Text>
-
-            {companyLoading ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator
-                  size="large"
-                  color={colors.primary}
-                />
-                <Text
-                  style={[
-                    styles.loadingText,
-                    { color: colors.muted },
-                  ]}
-                >
-                  Loading company details...
-                </Text>
-              </View>
-            ) : companyError ? (
-              <View style={styles.errorContainer}>
-                <Ionicons
-                  name="alert-circle-outline"
-                  size={25}
-                  color={colors.danger}
-                />
-
-                <Text
-                  style={[
-                    styles.errorText,
-                    { color: colors.danger },
-                  ]}
-                >
-                  {companyError}
-                </Text>
-
-                <TouchableOpacity onPress={loadCompany}>
-                  <Text
-                    style={[
-                      styles.retryText,
-                      { color: colors.primary },
-                    ]}
-                  >
-                    Try again
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ) : company ? (
-              <>
-                <View
-                  style={[
-                    styles.companyIdentity,
-                    { borderBottomColor: colors.border },
-                  ]}
-                >
+      {section === "company" ? (
+        <Animated.View key="company" entering={FadeIn.duration(260)} style={styles.gap}>
+          {companyLoading ? (
+            <Card style={styles.gap}>
+              <Skeleton height={56} width={56} round={16} />
+              <Skeleton height={16} width="70%" />
+              <Skeleton height={16} width="50%" />
+              <Skeleton height={16} width="60%" />
+            </Card>
+          ) : companyError ? (
+            <EmptyState
+              icon="alert-circle-outline"
+              title="Company details did not load"
+              message={companyError}
+              action={
+                <Button small kind="ghost" label="Try again" icon="refresh" onPress={loadCompany} />
+              }
+            />
+          ) : company ? (
+            <>
+              <Card pad={0}>
+                <View style={styles.companyHead}>
                   {companyLogoUrl ? (
                     <Image
                       source={{ uri: companyLogoUrl }}
-                      style={[
-                        styles.companyLogo,
-                        {
-                          backgroundColor: colors.surface,
-                          borderColor: colors.border,
-                        },
-                      ]}
+                      style={[styles.logo, { borderColor: colors.border, backgroundColor: "#FFFFFF" }]}
                       resizeMode="contain"
                     />
                   ) : (
-                    <View
-                      style={[
-                        styles.companyLogoPlaceholder,
-                        { backgroundColor: colors.surfaceSecondary },
-                      ]}
-                    >
-                      <Ionicons
-                        name="business-outline"
-                        size={29}
-                        color={colors.primary}
-                      />
+                    <View style={[styles.logo, styles.center, { backgroundColor: colors.accentMuted, borderColor: "transparent" }]}>
+                      <Ionicons name="business-outline" size={26} color={colors.accent} />
                     </View>
                   )}
-
                   <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        styles.companyName,
-                        { color: colors.text },
-                      ]}
-                    >
+                    <T v="heading" numberOfLines={2}>
                       {company.name || user?.clientName || "Company"}
-                    </Text>
-
-                    <Text
-                      style={[
-                        styles.companySubtitle,
-                        { color: colors.muted },
-                      ]}
-                    >
-                      Connected client organisation
-                    </Text>
+                    </T>
+                    <T v="caption" tone="faint">
+                      The organisation this account belongs to
+                    </T>
                   </View>
                 </View>
 
                 {companyFields.map((field) => {
-                  const value = displayValue(
-                    company[field.key as keyof PortalClient]
-                  );
-
+                  const value = displayValue(company[field.key as keyof PortalClient]);
                   if (!value || field.key === "name") return null;
-
                   return (
-                    <View
-                      key={field.key}
-                      style={[
-                        styles.companyField,
-                        { borderBottomColor: colors.border },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.companyFieldLabel,
-                          { color: colors.muted },
-                        ]}
-                      >
-                        {field.label}
-                      </Text>
-
-                      <Text
-                        style={[
-                          styles.companyFieldValue,
-                          { color: colors.text },
-                        ]}
-                      >
-                        {value}
-                      </Text>
+                    <View key={field.key}>
+                      <Hairline style={{ marginLeft: space.lg }} />
+                      <View style={styles.companyRow}>
+                        <T tone="muted">{field.label}</T>
+                        <T v="bodyStrong" style={{ flex: 1, textAlign: "right" }} selectable>
+                          {value}
+                        </T>
+                      </View>
                     </View>
                   );
                 })}
+              </Card>
 
-                <View style={styles.readOnlyNotice}>
-                  <Ionicons
-                    name="lock-closed-outline"
-                    size={15}
-                    color={colors.muted}
-                  />
-
-                  <Text
-                    style={[
-                      styles.readOnlyText,
-                      { color: colors.muted },
-                    ]}
-                  >
-                    Company details are managed by Fifth Avenue.
-                  </Text>
-                </View>
-              </>
-            ) : (
-              <Text
-                style={[
-                  styles.loadingText,
-                  { color: colors.muted },
-                ]}
-              >
-                No company information available.
-              </Text>
-            )}
-          </View>
-        )}
-
-        <Text
-          style={[
-            styles.footerText,
-            { color: colors.muted },
-          ]}
-        >
-          Fifth Avenue Client Portal
-        </Text>
-      </ScrollView>
-    </View>
+              <View style={styles.notice}>
+                <Ionicons name="lock-closed-outline" size={14} color={colors.muted} />
+                <T v="caption" tone="faint" style={{ flex: 1 }}>
+                  Fifth Avenue manages these details. Ask your account manager to change them.
+                </T>
+              </View>
+            </>
+          ) : (
+            <T tone="muted">No company information on file.</T>
+          )}
+        </Animated.View>
+      ) : null}
+    </ScreenScroll>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-  },
-
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 25,
-    paddingBottom: 40,
-  },
-
-  pageHeading: {
-    marginBottom: 22,
-  },
-
-  eyebrow: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 2,
-    marginBottom: 7,
-  },
-
-  pageTitle: {
-    fontSize: 29,
-    fontWeight: "700",
-    letterSpacing: -0.7,
-  },
-
-  pageDescription: {
-    fontSize: 13,
-    marginTop: 6,
-  },
-
-  sectionNavigation: {
-    gap: 10,
-    paddingBottom: 14,
-  },
-
-  sectionButton: {
-    height: 40,
-    paddingHorizontal: 11,
-    borderRadius: 24,
-    borderWidth: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-
-  sectionButtonText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-
-  card: {
-    borderRadius: 19,
-    padding: 19,
-    marginBottom: 16,
-    borderWidth: 1,
-  },
-
-  cardHeading: {
-    marginBottom: 17,
-  },
-
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-  },
-
-  cardDescription: {
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 6,
-    marginBottom: 18,
-  },
-
-  profileIdentity: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 13,
-    paddingBottom: 19,
-    marginBottom: 5,
-    borderBottomWidth: 1,
-  },
-
-  avatar: {
-    width: 53,
-    height: 53,
-    borderRadius: 27,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  avatarText: {
-    fontSize: 17,
-    fontWeight: "700",
-  },
-
-  identityName: {
-    fontSize: 15,
-    fontWeight: "700",
-  },
-
-  identityEmail: {
-    fontSize: 12,
-    marginTop: 4,
-  },
-
+  gap: { gap: space.lg },
+  center: { alignItems: "center", justifyContent: "center" },
+  identity: { flexDirection: "row", alignItems: "center", gap: space.lg },
+  avatar: { width: 68, height: 68, borderRadius: 34 },
   field: {
-    marginTop: 15,
-  },
-
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    marginBottom: 8,
-  },
-
-  input: {
-    height: 47,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 13,
-    fontSize: 13,
-  },
-
-  primaryButton: {
-    height: 48,
-    borderRadius: 11,
+    height: 52,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 9,
-    marginTop: 22,
-  },
-
-  primaryButtonText: {
-    fontSize: 13,
-    color: "#FFFFFF",
-    fontWeight: "700",
-  },
-
-  secondaryButton: {
-    height: 46,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 21,
-  },
-
-  secondaryButtonText: {
-    fontSize: 13,
-    fontWeight: "700",
-  },
-
-  themeOption: {
-    minHeight: 75,
-    borderRadius: 13,
-    borderWidth: 1,
-    padding: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginBottom: 10,
-  },
-
-  themeIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  themeLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-  },
-
-  themeDescription: {
-    fontSize: 11,
-    marginTop: 4,
-  },
-
-  themeStatus: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 12,
-    borderRadius: 11,
-    marginTop: 7,
-  },
-
-  themeStatusText: {
-    fontSize: 11,
-    fontWeight: "600",
-    flex: 1,
-  },
-
-  appearanceNote: {
-    fontSize: 11,
-    lineHeight: 17,
-    marginTop: 12,
-  },
-
-  companyIdentity: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 13,
-    paddingBottom: 20,
-    marginBottom: 5,
-    borderBottomWidth: 1,
-  },
-
-  companyLogo: {
-    width: 58,
-    height: 58,
-    borderRadius: 13,
-    borderWidth: 1,
-  },
-
-  companyLogoPlaceholder: {
-    width: 58,
-    height: 58,
-    borderRadius: 13,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  companyName: {
-    fontSize: 16,
-    fontWeight: "700",
-  },
-
-  companySubtitle: {
-    fontSize: 11,
-    marginTop: 5,
-  },
-
-  companyField: {
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-  },
-
-  companyFieldLabel: {
-    fontSize: 11,
-    marginBottom: 5,
-  },
-
-  companyFieldValue: {
-    fontSize: 13,
-    fontWeight: "600",
-  },
-
-  readOnlyNotice: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    marginTop: 17,
-  },
-
-  readOnlyText: {
-    fontSize: 11,
-    flex: 1,
-  },
-
-  loadingContainer: {
-    minHeight: 150,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-  },
-
-  loadingText: {
-    fontSize: 12,
-    textAlign: "center",
-  },
-
-  errorContainer: {
-    minHeight: 140,
-    alignItems: "center",
-    justifyContent: "center",
     gap: 10,
   },
-
-  errorText: {
-    fontSize: 12,
-    textAlign: "center",
+  input: {
+    flex: 1,
+    height: "100%",
+    fontFamily: fonts.sans,
+    fontSize: 14.5,
+    ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as object) : null),
   },
-
-  retryText: {
-    fontSize: 13,
-    fontWeight: "700",
+  themeOption: { flex: 1, borderRadius: radius.lg, padding: 8, gap: 8 },
+  preview: {
+    height: 92,
+    borderRadius: radius.sm,
+    overflow: "hidden",
+    flexDirection: "row",
   },
-
-  footerText: {
-    textAlign: "center",
-    fontSize: 10,
-    marginTop: 9,
+  themeLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingBottom: 4,
   },
+  companyHead: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.lg },
+  logo: { width: 56, height: 56, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth },
+  companyRow: { flexDirection: "row", alignItems: "flex-start", gap: space.lg, padding: space.lg },
+  notice: { flexDirection: "row", alignItems: "center", gap: 8 },
 });

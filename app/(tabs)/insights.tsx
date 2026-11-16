@@ -1,19 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-  ActivityIndicator,
-  RefreshControl,
-  Linking,
-  Alert,
-} from "react-native";
+import { Alert, Image, Linking, ScrollView, StyleSheet, View } from "react-native";
+import Animated, {
+  FadeIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+} from "react-native-reanimated";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 
 import { useAuth } from "../../src/context/AuthContext";
-
+import { useAppTheme } from "../../src/context/ThemeContext";
 import {
   type PortalScope,
   type InsightItem,
@@ -30,19 +28,27 @@ import {
   getPortalNewsletterFileUrl,
   togglePortalFavourite,
 } from "../../src/lib/api";
-
-const COLORS = {
-  background: "#F8F7F4",
-  card: "#FFFFFF",
-  text: "#17243A",
-  muted: "#7A8290",
-  border: "#EAE8E2",
-  accent: "#526F9D",
-  green: "#39856B",
-  red: "#CE6666",
-  blue: "#557CB5",
-  yellow: "#C49542",
-};
+import {
+  Card,
+  EmptyState,
+  ErrorState,
+  Hairline,
+  IconBadge,
+  Meter,
+  Reveal,
+  ScreenScroll,
+  ScreenSkeleton,
+  ScreenTitle,
+  SectionTitle,
+  Segmented,
+  T,
+  Tap,
+  thud,
+  type IconName,
+  type Tone,
+} from "../../src/ui/primitives";
+import { compactCount } from "../../src/ui/format";
+import { fonts, midnight, radius, space, springs } from "../../src/ui/theme";
 
 const SECTIONS = [
   "Questions",
@@ -74,39 +80,20 @@ const EMPTY_DATA: InsightsData = {
   favourites: null,
 };
 
-const QUESTION_FIELDS = [
-  {
-    key: "whatWorked",
-    title: "What Works",
-    color: COLORS.green,
-    number: "01",
-  },
-  {
-    key: "whatDidntWork",
-    title: "What Didn't Work",
-    color: COLORS.red,
-    number: "02",
-  },
-  {
-    key: "nextActions",
-    title: "Next Actions",
-    color: COLORS.blue,
-    number: "03",
-  },
-  {
-    key: "areasToImprove",
-    title: "Areas to Improve",
-    color: COLORS.yellow,
-    number: "04",
-  },
-] as const;
+const QUESTION_FIELDS: {
+  key: "whatWorked" | "whatDidntWork" | "nextActions" | "areasToImprove";
+  title: string;
+  icon: IconName;
+  tone: Tone;
+}[] = [
+  { key: "whatWorked", title: "What worked", icon: "checkmark-circle-outline", tone: "success" },
+  { key: "whatDidntWork", title: "What didn't work", icon: "close-circle-outline", tone: "danger" },
+  { key: "nextActions", title: "Next actions", icon: "arrow-forward-circle-outline", tone: "accent" },
+  { key: "areasToImprove", title: "Areas to improve", icon: "construct-outline", tone: "warning" },
+];
 
 function formatNumber(value?: number | null) {
-  if (value == null) return "—";
-  return Intl.NumberFormat("en-IN", {
-    notation: value >= 10000 ? "compact" : "standard",
-    maximumFractionDigits: 1,
-  }).format(value);
+  return compactCount(value);
 }
 
 function formatDate(value?: string) {
@@ -123,68 +110,167 @@ function formatDate(value?: string) {
   });
 }
 
-function Card({
-  children,
-  style,
-}: {
-  children: React.ReactNode;
-  style?: object;
-}) {
-  return <View style={[styles.card, style]}>{children}</View>;
-}
+type ReelItem = InsightItem & { sourceType: "trending" | "market-watch" };
 
-function SectionHeading({
-  title,
-  subtitle,
-}: {
-  title: string;
-  subtitle?: string;
-}) {
-  return (
-    <View style={styles.sectionHeading}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {subtitle ? (
-        <Text style={styles.sectionSubtitle}>{subtitle}</Text>
-      ) : null}
-    </View>
-  );
-}
+// ---------------------------------------------------------------------------
+// Pieces
+// ---------------------------------------------------------------------------
 
-function EmptyState({ message }: { message: string }) {
+function Figure({ label, value, color }: { label: string; value: string | number; color?: string }) {
   return (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyText}>{message}</Text>
-    </View>
-  );
-}
-
-function LoadingState() {
-  return (
-    <View style={styles.loading}>
-      <ActivityIndicator size="large" color={COLORS.accent} />
-      <Text style={styles.loadingText}>Loading Insights...</Text>
-    </View>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string | number;
-  color?: string;
-}) {
-  return (
-    <View style={styles.metric}>
-      <Text style={[styles.metricValue, color ? { color } : null]}>
+    <View style={{ flex: 1 }}>
+      <T v="figureSm" color={color} numberOfLines={1} adjustsFontSizeToFit>
         {value}
-      </Text>
-      <Text style={styles.metricLabel}>{label}</Text>
+      </T>
+      <T v="caption" tone="faint">
+        {label}
+      </T>
     </View>
   );
 }
+
+function ListCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Card>
+      <T v="heading" style={{ marginBottom: space.sm }}>
+        {title}
+      </T>
+      {children}
+    </Card>
+  );
+}
+
+function Quote({ text, tone }: { text: string; tone: "success" | "danger" }) {
+  const { colors } = useAppTheme();
+  return (
+    <View
+      style={[
+        styles.quote,
+        { borderLeftColor: tone === "success" ? colors.success : colors.danger },
+      ]}
+    >
+      <T style={{ fontFamily: fonts.serifItalic, fontSize: 16, lineHeight: 23 }}>{text}</T>
+    </View>
+  );
+}
+
+function ReelCard({
+  item,
+  favourited,
+  onFavourite,
+}: {
+  item: ReelItem;
+  favourited: boolean;
+  onFavourite: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const pop = useSharedValue(1);
+  const star = useAnimatedStyle(() => ({ transform: [{ scale: pop.value }] }));
+
+  const open = () => {
+    const url = item.url || item.media?.video;
+    if (url) Linking.openURL(url);
+    else Alert.alert("Reel", "No reel link is available.");
+  };
+
+  return (
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel={`Open reel${item.media?.username ? ` by ${item.media.username}` : ""}`}
+      onPress={open}
+      scaleTo={0.97}
+      style={[styles.reel, { backgroundColor: colors.surfaceSecondary }]}
+    >
+      {item.media?.thumbnail ? (
+        <Image source={{ uri: item.media.thumbnail }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+      ) : (
+        <View style={[StyleSheet.absoluteFill, styles.reelBlank]}>
+          <Ionicons name="film-outline" size={26} color={colors.faint} />
+          <T v="caption" tone="faint">
+            No preview yet
+          </T>
+        </View>
+      )}
+      <LinearGradient
+        pointerEvents="none"
+        colors={["rgba(0,0,28,0)", "rgba(0,0,28,0.88)"]}
+        style={styles.reelShade}
+      />
+
+      <Tap
+        accessibilityRole="button"
+        accessibilityLabel={favourited ? "Remove from favourites" : "Add to favourites"}
+        accessibilityState={{ selected: favourited }}
+        haptic={false}
+        onPress={() => {
+          thud();
+          pop.value = withSequence(withSpring(1.4, springs.press), withSpring(1, springs.press));
+          onFavourite();
+        }}
+        hitSlop={8}
+        style={styles.reelStar}
+      >
+        <Animated.View style={star}>
+          <Ionicons
+            name={favourited ? "star" : "star-outline"}
+            size={17}
+            color={favourited ? midnight.lamp : "#FFFFFF"}
+          />
+        </Animated.View>
+      </Tap>
+
+      <View style={styles.reelText}>
+        <T v="label" color="#FFFFFF" numberOfLines={1}>
+          {item.media?.username ? `@${item.media.username}` : "Instagram reel"}
+        </T>
+        {item.media?.caption ? (
+          <T v="caption" color="rgba(255,255,255,0.78)" numberOfLines={2}>
+            {item.media.caption}
+          </T>
+        ) : null}
+        <View style={styles.reelStats}>
+          <Ionicons name="eye-outline" size={12} color="#FFFFFF" />
+          <T v="caption" color="#FFFFFF">
+            {formatNumber(item.media?.views)}
+          </T>
+          <Ionicons name="heart-outline" size={12} color="#FFFFFF" style={{ marginLeft: 8 }} />
+          <T v="caption" color="#FFFFFF">
+            {formatNumber(item.media?.likes)}
+          </T>
+        </View>
+      </View>
+    </Tap>
+  );
+}
+
+function Notes({ notes, dated }: { notes: InsightItem[]; dated?: boolean }) {
+  return (
+    <Card pad={0}>
+      {notes.map((note, index) => (
+        <View key={String(note.id || index)}>
+          {index > 0 ? <Hairline style={{ marginLeft: space.lg }} /> : null}
+          <View style={{ padding: space.lg, gap: 4 }}>
+            {dated && note.topic ? (
+              <T v="label" tone="accent">
+                {note.topic}
+              </T>
+            ) : null}
+            <T>{note.text || note.title || "—"}</T>
+            {dated && note.createdAt ? (
+              <T v="caption" tone="faint">
+                {formatDate(note.createdAt)}
+              </T>
+            ) : null}
+          </View>
+        </View>
+      ))}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
 
 export default function OverviewScreen() {
   const { user } = useAuth();
@@ -322,21 +408,13 @@ export default function OverviewScreen() {
     }
   };
 
-  if (loading) return <LoadingState />;
+  const { colors } = useAppTheme();
+
+  if (loading) return <ScreenSkeleton hero={false} />;
 
   if (error) {
     return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorTitle}>Insights couldn't load</Text>
-        <Text style={styles.errorText}>{error}</Text>
-
-        <TouchableOpacity
-          style={styles.retryButton}
-          onPress={() => loadInsights()}
-        >
-          <Text style={styles.retryText}>Try again</Text>
-        </TouchableOpacity>
-      </View>
+      <ErrorState title="Insights did not load" message={error} onRetry={() => loadInsights()} />
     );
   }
 
@@ -344,42 +422,30 @@ export default function OverviewScreen() {
     const questions = data.questions;
 
     if (!questions) {
-      return <EmptyState message="No questions available yet." />;
+      return <EmptyState icon="help-circle-outline" title="No answers yet" message="Your account team's review appears here after each campaign cycle." />;
     }
 
     return (
-      <View style={styles.contentGap}>
-        {QUESTION_FIELDS.map((field) => {
+      <View style={styles.gap}>
+        {QUESTION_FIELDS.map((field, index) => {
           const answer = questions[field.key];
-
           return (
-            <Card key={field.key}>
-              <View style={styles.questionHeader}>
-                <View
-                  style={[
-                    styles.questionNumber,
-                    { backgroundColor: `${field.color}18` },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.questionNumberText,
-                      { color: field.color },
-                    ]}
-                  >
-                    {field.number}
-                  </Text>
+            <Reveal key={field.key} index={index}>
+              <Card>
+                <View style={styles.questionHead}>
+                  <IconBadge icon={field.icon} tone={field.tone} />
+                  <View style={{ flex: 1 }}>
+                    <T v="heading">{field.title}</T>
+                    <T v="caption" tone="faint" numberOfLines={1}>
+                      {user?.clientName || "Your brand"}
+                    </T>
+                  </View>
                 </View>
-
-                <Text style={styles.questionTitle}>
-                  {field.title} {user?.clientName || "Your Brand"}
-                </Text>
-              </View>
-
-              <Text style={styles.answerText}>
-                {answer || "No answer yet — ask the team."}
-              </Text>
-            </Card>
+                <T tone={answer ? "default" : "muted"} style={{ marginTop: space.md }}>
+                  {answer || "Not answered yet. Your account team can fill this in."}
+                </T>
+              </Card>
+            </Reveal>
           );
         })}
       </View>
@@ -392,205 +458,134 @@ export default function OverviewScreen() {
     const totals = insight?.totals;
 
     if (!response) {
-      return (
-        <EmptyState message="Audience Voice is not available right now." />
-      );
+      return <EmptyState icon="chatbubbles-outline" title="Audience voice is unavailable" message="Pull down to try again." />;
     }
 
     if (!insight || !totals?.comments) {
       let message =
-        "Once your campaign posts are live, audience comments will be summarised here. It updates every week.";
+        "Once your campaign posts are live, the comments on them are summarised here every week.";
 
       if (response.status === "running") {
-        message =
-          "Your campaign comments are being read right now. Check back in a few minutes.";
+        message = "Your campaign comments are being read right now. Check back in a few minutes.";
       } else if (insight?.totals?.posts) {
-        message =
-          "No comments to read on your campaign posts yet.";
+        message = "Your campaign posts have no comments to read yet.";
       }
 
-      return <EmptyState message={message} />;
+      return <EmptyState icon="chatbubbles-outline" title="Nothing to summarise yet" message={message} />;
     }
 
     const sentiment = insight.sentimentPct || {};
-    const net = Math.round(
-      (sentiment.positive || 0) - (sentiment.negative || 0)
-    );
+    const net = Math.round((sentiment.positive || 0) - (sentiment.negative || 0));
+    const text = (item: any, ...keys: string[]) =>
+      typeof item === "string" ? item : keys.map((key) => item?.[key]).find(Boolean) || "—";
 
     return (
-      <View style={styles.contentGap}>
-        <Card>
-          <Text style={styles.cardEyebrow}>AUDIENCE OVERVIEW</Text>
-          <Text style={styles.audienceHeadline}>
-            What your audience is saying
-          </Text>
-
-          <View style={styles.metricsGrid}>
-            <Metric
-              label="Comments"
-              value={formatNumber(totals.comments)}
+      <View style={styles.gap}>
+        <Reveal>
+          <View style={styles.voiceHero}>
+            <LinearGradient
+              colors={[midnight.top, midnight.mid, midnight.bottom]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
             />
-            <Metric
-              label="Posts"
-              value={formatNumber(totals.posts)}
-            />
-            <Metric
-              label="Positive"
-              value={`${sentiment.positive || 0}%`}
-              color={COLORS.green}
-            />
-            <Metric
-              label="Negative"
-              value={`${sentiment.negative || 0}%`}
-              color={COLORS.red}
-            />
-          </View>
-
-          <View style={styles.netSentiment}>
-            <Text style={styles.netSentimentLabel}>
+            <T v="label" color={midnight.muted}>
               Net sentiment
-            </Text>
-            <Text
-              style={[
-                styles.netSentimentValue,
-                { color: net >= 0 ? COLORS.green : COLORS.red },
-              ]}
+            </T>
+            <T
+              color={net >= 0 ? midnight.lamp : "#F0A0A0"}
+              style={{ fontFamily: fonts.serif, fontSize: 64, lineHeight: 70, letterSpacing: -2 }}
             >
               {net > 0 ? "+" : ""}
               {net}%
-            </Text>
-          </View>
-
-          <Text style={styles.updatedText}>
-            Updated {formatDate(response.generatedAt)}
-          </Text>
-        </Card>
-
-        <Card>
-          <Text style={styles.cardTitle}>Sentiment breakdown</Text>
-
-          {[
-            {
-              label: "Positive",
-              value: sentiment.positive || 0,
-              color: COLORS.blue,
-            },
-            {
-              label: "Neutral",
-              value: sentiment.neutral || 0,
-              color: "#A7A7A7",
-            },
-            {
-              label: "Negative",
-              value: sentiment.negative || 0,
-              color: COLORS.red,
-            },
-          ].map((item) => (
-            <View key={item.label} style={styles.sentimentRow}>
-              <View style={styles.sentimentLabelRow}>
-                <Text style={styles.sentimentLabel}>
-                  {item.label}
-                </Text>
-                <Text style={styles.sentimentValue}>
-                  {item.value}%
-                </Text>
-              </View>
-
-              <View style={styles.progressTrack}>
-                <View
-                  style={[
-                    styles.progressFill,
-                    {
-                      width: `${Math.min(
-                        100,
-                        Math.max(0, item.value)
-                      )}%`,
-                      backgroundColor: item.color,
-                    },
-                  ]}
-                />
-              </View>
+            </T>
+            <T color={midnight.muted}>
+              Positive comments minus negative ones, across {formatNumber(totals.comments)} comments
+              on {formatNumber(totals.posts)} posts.
+            </T>
+            <View style={styles.voiceGrid}>
+              <Figure label="Comments" value={formatNumber(totals.comments)} color={midnight.text} />
+              <Figure label="Posts" value={formatNumber(totals.posts)} color={midnight.text} />
+              <Figure label="Positive" value={`${sentiment.positive || 0}%`} color={midnight.text} />
+              <Figure label="Negative" value={`${sentiment.negative || 0}%`} color={midnight.text} />
             </View>
-          ))}
-        </Card>
+            <T v="caption" color={midnight.faint} style={{ marginTop: space.md }}>
+              Updated {formatDate(response.generatedAt)}
+            </T>
+          </View>
+        </Reveal>
 
-        {!!insight.themes?.length && (
-          <Card>
-            <Text style={styles.cardTitle}>Audience topics</Text>
-
-            {insight.themes.map((theme: any, index: number) => {
-              const label =
-                typeof theme === "string"
-                  ? theme
-                  : theme.name || theme.theme || theme.label || "Topic";
-
-              return (
-                <View key={`${label}-${index}`} style={styles.simpleRow}>
-                  <Text style={styles.answerText}>{label}</Text>
+        <Reveal index={1}>
+          <ListCard title="Sentiment breakdown">
+            {[
+              { label: "Positive", value: sentiment.positive || 0, color: colors.success },
+              { label: "Neutral", value: sentiment.neutral || 0, color: colors.faint },
+              { label: "Negative", value: sentiment.negative || 0, color: colors.danger },
+            ].map((item, index) => (
+              <View key={item.label} style={{ gap: 6, marginTop: index ? space.md : 4 }}>
+                <View style={styles.rowBetween}>
+                  <T v="label">{item.label}</T>
+                  <T v="label" tone="muted">
+                    {item.value}%
+                  </T>
                 </View>
-              );
-            })}
-          </Card>
-        )}
+                <Meter value={item.value} color={item.color} height={8} delay={200 + index * 120} />
+              </View>
+            ))}
+          </ListCard>
+        </Reveal>
 
-        {!!insight.purchaseQuotes?.length && (
-          <Card>
-            <Text style={styles.cardTitle}>Buying signals</Text>
+        {insight.themes?.length ? (
+          <ListCard title="What they talk about">
+            <View style={styles.chips}>
+              {insight.themes.map((theme: any, index: number) => {
+                const label = text(theme, "name", "theme", "label");
+                return (
+                  <View
+                    key={`${label}-${index}`}
+                    style={[styles.chip, { backgroundColor: colors.well }]}
+                  >
+                    <T v="label">{label === "—" ? "Topic" : label}</T>
+                  </View>
+                );
+              })}
+            </View>
+          </ListCard>
+        ) : null}
 
-            {insight.purchaseQuotes.slice(0, 5).map(
-              (item: any, index: number) => (
-                <View
-                  key={index}
-                  style={styles.quoteBox}
-                >
-                  <Text style={styles.answerText}>
-                    “{typeof item === "string"
-                      ? item
-                      : item.text || item.comment || "—"}”
-                  </Text>
+        {insight.purchaseQuotes?.length ? (
+          <ListCard title="Buying signals">
+            <View style={{ gap: space.md }}>
+              {insight.purchaseQuotes.slice(0, 5).map((item: any, index: number) => (
+                <Quote key={index} tone="success" text={`“${text(item, "text", "comment")}”`} />
+              ))}
+            </View>
+          </ListCard>
+        ) : null}
+
+        {insight.questions?.length ? (
+          <ListCard title="Questions from your audience">
+            {insight.questions.map((item: any, index: number) => (
+              <View key={index}>
+                {index > 0 ? <Hairline /> : null}
+                <View style={styles.askRow}>
+                  <Ionicons name="help-circle-outline" size={17} color={colors.accent} />
+                  <T style={{ flex: 1 }}>{text(item, "text", "question")}</T>
                 </View>
-              )
-            )}
-          </Card>
-        )}
+              </View>
+            ))}
+          </ListCard>
+        ) : null}
 
-        {!!insight.questions?.length && (
-          <Card>
-            <Text style={styles.cardTitle}>
-              Questions from your audience
-            </Text>
-
-            {insight.questions.map(
-              (item: any, index: number) => (
-                <View key={index} style={styles.simpleRow}>
-                  <Text style={styles.answerText}>
-                    {typeof item === "string"
-                      ? item
-                      : item.text || item.question || "—"}
-                  </Text>
-                </View>
-              )
-            )}
-          </Card>
-        )}
-
-        {!!insight.negativeComments?.length && (
-          <Card>
-            <Text style={styles.cardTitle}>Concerns</Text>
-
-            {insight.negativeComments.map(
-              (item: any, index: number) => (
-                <View key={index} style={styles.quoteBox}>
-                  <Text style={styles.answerText}>
-                    {typeof item === "string"
-                      ? item
-                      : item.text || item.comment || "—"}
-                  </Text>
-                </View>
-              )
-            )}
-          </Card>
-        )}
+        {insight.negativeComments?.length ? (
+          <ListCard title="Concerns">
+            <View style={{ gap: space.md }}>
+              {insight.negativeComments.map((item: any, index: number) => (
+                <Quote key={index} tone="danger" text={text(item, "text", "comment")} />
+              ))}
+            </View>
+          </ListCard>
+        ) : null}
       </View>
     );
   };
@@ -636,272 +631,129 @@ export default function OverviewScreen() {
         }))
       : favouriteReels;
 
-  const renderReel = (
-    item: InsightItem & {
-      sourceType: "trending" | "market-watch";
-    }
-  ) => {
-    const id = String(item.id || "");
-
-    const favourited = isFavourite(item.sourceType, id);
-
-    return (
-      <Card key={`${item.sourceType}-${id}`} style={styles.reelCard}>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => {
-            const url = item.url || item.media?.video;
-
-            if (url) Linking.openURL(url);
-            else Alert.alert("Reel", "No reel link is available.");
-          }}
-        >
-          {item.media?.thumbnail ? (
-            <Image
-              source={{ uri: item.media.thumbnail }}
-              style={styles.reelImage}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={[styles.reelImage, styles.noImage]}>
-              <Text style={styles.noImageText}>No snapshot yet</Text>
-            </View>
-          )}
-
-          <Text style={styles.reelUsername}>
-            {item.media?.username
-              ? `@${item.media.username}`
-              : "Instagram Reel"}
-          </Text>
-
-          {!!item.media?.caption && (
-            <Text numberOfLines={2} style={styles.reelCaption}>
-              {item.media.caption}
-            </Text>
-          )}
-
-          <View style={styles.reelStats}>
-            <Text style={styles.reelStat}>
-              Views {formatNumber(item.media?.views)}
-            </Text>
-            <Text style={styles.reelStat}>
-              Likes {formatNumber(item.media?.likes)}
-            </Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.favoriteButton}
-          onPress={() =>
-            handleFavourite(item.sourceType, id)
-          }
-        >
-          <Text
-            style={[
-              styles.favoriteIcon,
-              favourited && { color: COLORS.yellow },
-            ]}
-          >
-            {favourited ? "★" : "☆"}
-          </Text>
-        </TouchableOpacity>
-      </Card>
-    );
-  };
+  const reelGrid = (reels: ReelItem[]) => (
+    <View style={styles.reelGrid}>
+      {reels.map((item) => {
+        const id = String(item.id || "");
+        return (
+          <ReelCard
+            key={`${item.sourceType}-${id}`}
+            item={item}
+            favourited={isFavourite(item.sourceType, id)}
+            onFavourite={() => handleFavourite(item.sourceType, id)}
+          />
+        );
+      })}
+    </View>
+  );
 
   const renderTrending = () => {
-    const notes = (data.trending || []).filter(
-      (item) => item.kind === "note"
-    );
+    const notes = (data.trending || []).filter((item) => item.kind === "note");
 
     const activeStats = activeReels.reduce(
       (totals, item) => ({
-        views:
-          totals.views + (item.media?.views || 0),
-        likes:
-          totals.likes + (item.media?.likes || 0),
+        views: totals.views + (item.media?.views || 0),
+        likes: totals.likes + (item.media?.likes || 0),
       }),
       { views: 0, likes: 0 }
     );
 
     return (
-      <View style={styles.contentGap}>
-        <View style={styles.tabRow}>
-          {[
-            { key: "general", label: "General" },
-            { key: "industry", label: "Industry" },
-            { key: "favourite", label: "Favourite" },
-          ].map((tab) => (
-            <TouchableOpacity
-              key={tab.key}
-              onPress={() => setTrendTab(tab.key as any)}
-              style={[
-                styles.trendTab,
-                trendTab === tab.key && styles.trendTabActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.trendTabText,
-                  trendTab === tab.key &&
-                    styles.trendTabTextActive,
-                ]}
-              >
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+      <View style={styles.gap}>
+        <Segmented
+          value={trendTab}
+          onChange={setTrendTab}
+          options={[
+            { value: "general", label: "General" },
+            { value: "industry", label: "Industry" },
+            { value: "favourite", label: "Favourites" },
+          ]}
+        />
 
         {activeReels.length ? (
-          <View style={styles.reelGrid}>
-            {activeReels.map(renderReel)}
-          </View>
+          <>
+            <View style={[styles.statStrip, { borderColor: colors.borderStrong }]}>
+              <Figure label="Reels" value={activeReels.length} />
+              <Figure label="Total views" value={formatNumber(activeStats.views)} />
+              <Figure label="Total likes" value={formatNumber(activeStats.likes)} />
+            </View>
+            <Animated.View key={trendTab} entering={FadeIn.duration(280)}>
+              {reelGrid(activeReels)}
+            </Animated.View>
+          </>
         ) : (
           <EmptyState
+            icon={trendTab === "favourite" ? "star-outline" : "film-outline"}
+            title={trendTab === "favourite" ? "No favourites yet" : "No reels yet"}
             message={
               trendTab === "favourite"
-                ? "Nothing favourited yet."
-                : "No reels available yet."
+                ? "Tap the star on any reel to keep it here."
+                : "Trending reels appear here as the team adds them."
             }
           />
         )}
 
-        {activeReels.length > 0 && (
-          <Card>
-            <View style={styles.metricsGrid}>
-              <Metric label="Reels" value={activeReels.length} />
-              <Metric
-                label="Total views"
-                value={formatNumber(activeStats.views)}
-              />
-              <Metric
-                label="Total likes"
-                value={formatNumber(activeStats.likes)}
-              />
-            </View>
-          </Card>
-        )}
-
-        {trendTab === "general" && (
+        {trendTab === "general" ? (
           <>
-            <SectionHeading title="Our Insights" />
-
+            <SectionTitle title="Our insights" note="Notes from the Fifth Avenue team" />
             {notes.length ? (
-              <Card>
-                {notes.map((note, index) => (
-                  <View
-                    key={String(note.id || index)}
-                    style={styles.noteItem}
-                  >
-                    <Text style={styles.answerText}>
-                      {note.text || note.title || "—"}
-                    </Text>
-                  </View>
-                ))}
-              </Card>
+              <Notes notes={notes} />
             ) : (
-              <EmptyState message="Nothing here yet." />
+              <T tone="muted">No notes yet.</T>
             )}
           </>
-        )}
+        ) : null}
       </View>
     );
   };
 
   const renderMarketWatch = () => {
-    const notes = (data.marketWatch || []).filter(
-      (item) => item.kind === "note"
-    );
+    const notes = (data.marketWatch || []).filter((item) => item.kind === "note");
 
     return (
-      <View style={styles.contentGap}>
-        <SectionHeading
-          title="Latest News"
-          subtitle="Industry updates and headlines"
-        />
+      <View style={styles.gap}>
+        <SectionTitle title="Latest news" note="Industry updates and headlines" />
 
         {data.news?.length ? (
           data.news.map((item, index) => (
-            <TouchableOpacity
-              key={String(item.id || item.link || index)}
-              activeOpacity={0.85}
-              onPress={() => {
-                const url = item.link || item.url;
-
-                if (url) Linking.openURL(url);
-              }}
-            >
-              <Card>
-                {item.image ? (
-                  <Image
-                    source={{ uri: item.image }}
-                    style={styles.newsImage}
-                    resizeMode="cover"
-                  />
-                ) : null}
-
-                <Text style={styles.newsTitle}>
-                  {item.title || "Untitled news"}
-                </Text>
-
-                <Text style={styles.newsSource}>
-                  {item.source || "Industry news"}
-                </Text>
-              </Card>
-            </TouchableOpacity>
+            <Reveal key={String(item.id || item.link || index)} index={index}>
+              <Tap
+                accessibilityRole="link"
+                scaleTo={0.98}
+                onPress={() => {
+                  const url = item.link || item.url;
+                  if (url) Linking.openURL(url);
+                }}
+              >
+                <Card pad={0} style={{ overflow: "hidden" }}>
+                  {item.image ? (
+                    <Image source={{ uri: item.image }} style={styles.newsImage} resizeMode="cover" />
+                  ) : null}
+                  <View style={styles.newsBody}>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <T v="subhead">{item.title || "Untitled story"}</T>
+                      <T v="caption" tone="faint">
+                        {item.source || "Industry news"}
+                      </T>
+                    </View>
+                    <Ionicons name="open-outline" size={16} color={colors.muted} />
+                  </View>
+                </Card>
+              </Tap>
+            </Reveal>
           ))
         ) : (
-          <EmptyState message="Nothing in the news feed yet." />
+          <T tone="muted">The news feed is empty right now.</T>
         )}
 
-        <SectionHeading
-          title="Our Watch"
-          subtitle="Updates curated for your brand"
-        />
+        <SectionTitle title="Our watch" note="Updates picked for your brand" />
+        {notes.length ? <Notes notes={notes} dated /> : <T tone="muted">No updates yet.</T>}
 
-        {notes.length ? (
-          <Card>
-            {notes.map((note, index) => (
-              <View
-                key={String(note.id || index)}
-                style={styles.noteItem}
-              >
-                {!!note.topic && (
-                  <Text style={styles.noteTopic}>
-                    {note.topic}
-                  </Text>
-                )}
-
-                <Text style={styles.answerText}>
-                  {note.text || "—"}
-                </Text>
-
-                {!!note.createdAt && (
-                  <Text style={styles.updatedText}>
-                    {formatDate(note.createdAt)}
-                  </Text>
-                )}
-              </View>
-            ))}
-          </Card>
-        ) : (
-          <EmptyState message="Nothing here yet." />
-        )}
-
-        <SectionHeading title="Industry Reels" />
-
+        <SectionTitle title="Industry reels" />
         {industryReels.length ? (
-          <View style={styles.reelGrid}>
-            {industryReels.map((item) =>
-              renderReel({
-                ...item,
-                sourceType: "market-watch",
-              })
-            )}
-          </View>
+          reelGrid(industryReels.map((item) => ({ ...item, sourceType: "market-watch" as const })))
         ) : (
-          <EmptyState message="No industry reels available yet." />
+          <T tone="muted">No industry reels yet.</T>
         )}
       </View>
     );
@@ -909,54 +761,44 @@ export default function OverviewScreen() {
 
   const renderNewsletter = () => {
     if (!data.newsletter?.length) {
-      return <EmptyState message="No newsletters available yet." />;
+      return <EmptyState icon="newspaper-outline" title="No newsletters yet" message="Each issue appears here as a PDF when it is published." />;
     }
 
     return (
-      <View style={styles.contentGap}>
+      <Card pad={0}>
         {data.newsletter.map((item, index) => {
           const id = String(item.id || "");
-
           return (
-            <TouchableOpacity
-              key={id || index}
-              activeOpacity={0.8}
-              onPress={() => {
-                if (!scope || !id) return;
-
-                const url = getPortalNewsletterFileUrl(id, scope);
-
-                Linking.openURL(url).catch(() => {
-                  Alert.alert(
-                    "Unable to open newsletter",
-                    "Please try again."
-                  );
-                });
-              }}
-            >
-              <Card>
-                <View style={styles.newsletterRow}>
-                  <View style={styles.pdfIcon}>
-                    <Text style={styles.pdfIconText}>PDF</Text>
-                  </View>
-
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.newsletterTitle}>
-                      {item.title || "Newsletter.pdf"}
-                    </Text>
-
-                    <Text style={styles.updatedText}>
-                      {formatDate(item.uploadedAt)}
-                    </Text>
-                  </View>
-
-                  <Text style={styles.openIcon}>↗</Text>
+            <View key={id || index}>
+              {index > 0 ? <Hairline style={{ marginLeft: 70 }} /> : null}
+              <Tap
+                accessibilityRole="link"
+                accessibilityLabel={`Open ${item.title || "newsletter"}`}
+                scaleTo={0.985}
+                onPress={() => {
+                  if (!scope || !id) return;
+                  const url = getPortalNewsletterFileUrl(id, scope);
+                  Linking.openURL(url).catch(() => {
+                    Alert.alert("Unable to open newsletter", "Please try again.");
+                  });
+                }}
+                style={styles.letterRow}
+              >
+                <IconBadge icon="document-text-outline" tone="danger" />
+                <View style={{ flex: 1 }}>
+                  <T v="bodyStrong" numberOfLines={2}>
+                    {item.title || "Newsletter.pdf"}
+                  </T>
+                  <T v="caption" tone="faint">
+                    {formatDate(item.uploadedAt)}
+                  </T>
                 </View>
-              </Card>
-            </TouchableOpacity>
+                <Ionicons name="arrow-up-outline" size={17} color={colors.muted} style={{ transform: [{ rotate: "45deg" }] }} />
+              </Tap>
+            </View>
           );
         })}
-      </View>
+      </Card>
     );
   };
 
@@ -964,571 +806,121 @@ export default function OverviewScreen() {
     switch (activeSection) {
       case "Questions":
         return renderQuestions();
-
       case "Audience Voice":
         return renderAudienceVoice();
-
       case "Trending":
         return renderTrending();
-
       case "Market Watch":
         return renderMarketWatch();
-
       case "Newsletter":
         return renderNewsletter();
-
       default:
         return null;
     }
   };
 
   return (
-    <View style={styles.container}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => loadInsights(true)}
-            tintColor={COLORS.accent}
-          />
-        }
-      >
-        <View style={styles.header}>
-          <Text style={styles.eyebrow}>FIFTH AVENUE</Text>
-          <Text style={styles.title}>Beyond the account.</Text>
-          <Text style={styles.subtitle}>
-            Your brand's questions, audience voice and market intelligence.
-          </Text>
-        </View>
+    <ScreenScroll refreshing={refreshing} onRefresh={() => loadInsights(true)}>
+      <ScreenTitle
+        title="Beyond the account."
+        note="Your team's review, what your audience says, and what the market is doing."
+      />
 
+      <Reveal index={1} style={{ marginHorizontal: -space.xl }}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.sectionTabs}
+          contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}
         >
-          {SECTIONS.map((section) => (
-            <TouchableOpacity
-              key={section}
-              onPress={() => setActiveSection(section)}
-              style={[
-                styles.sectionTab,
-                activeSection === section &&
-                  styles.sectionTabActive,
-              ]}
-            >
-              <Text
+          {SECTIONS.map((section) => {
+            const active = activeSection === section;
+            return (
+              <Tap
+                key={section}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                onPress={() => setActiveSection(section)}
                 style={[
-                  styles.sectionTabText,
-                  activeSection === section &&
-                    styles.sectionTabTextActive,
+                  styles.sectionChip,
+                  {
+                    backgroundColor: active ? colors.accent : "transparent",
+                    borderColor: active ? colors.accent : colors.borderStrong,
+                  },
                 ]}
               >
-                {section}
-              </Text>
-            </TouchableOpacity>
-          ))}
+                <T v="label" color={active ? colors.onAccent : colors.text2}>
+                  {section}
+                </T>
+              </Tap>
+            );
+          })}
         </ScrollView>
+      </Reveal>
 
-        <View style={styles.sectionContent}>
-          <SectionHeading title={activeSection} />
-
-          {renderActiveSection()}
-        </View>
-
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            Insights · Fifth Avenue
-          </Text>
-        </View>
-      </ScrollView>
-    </View>
+      <Animated.View key={activeSection} entering={FadeIn.duration(260)}>
+        {renderActiveSection()}
+      </Animated.View>
+    </ScreenScroll>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-
-  header: {
-    paddingHorizontal: 22,
-    paddingTop: 28,
-    paddingBottom: 22,
-  },
-
-  eyebrow: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 2.5,
-    color: COLORS.accent,
-    marginBottom: 12,
-  },
-
-  title: {
-    fontSize: 31,
-    fontWeight: "800",
-    letterSpacing: -1,
-    color: COLORS.text,
-  },
-
-  subtitle: {
-    marginTop: 9,
-    fontSize: 13,
-    lineHeight: 20,
-    color: COLORS.muted,
-  },
-
-  sectionTabs: {
+  gap: { gap: space.lg },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  sectionChip: {
+    height: 40,
     paddingHorizontal: 18,
-    paddingBottom: 14,
-    gap: 8,
-  },
-
-  sectionTab: {
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    borderRadius: 30,
-    backgroundColor: "#ECEAE4",
-  },
-
-  sectionTabActive: {
-    backgroundColor: COLORS.text,
-  },
-
-  sectionTabText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: COLORS.muted,
-  },
-
-  sectionTabTextActive: {
-    color: "#FFFFFF",
-  },
-
-  sectionContent: {
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    paddingBottom: 30,
-  },
-
-  sectionHeading: {
-    marginBottom: 15,
-  },
-
-  sectionTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: COLORS.text,
-    letterSpacing: -0.5,
-  },
-
-  sectionSubtitle: {
-    fontSize: 12,
-    color: COLORS.muted,
-    marginTop: 5,
-  },
-
-  contentGap: {
-    gap: 13,
-  },
-
-  card: {
-    backgroundColor: COLORS.card,
-    borderRadius: 17,
-    padding: 17,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: "hidden",
-  },
-
-  questionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 11,
-  },
-
-  questionNumber: {
-    width: 37,
-    height: 37,
-    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
   },
-
-  questionNumberText: {
-    fontSize: 12,
-    fontWeight: "800",
-  },
-
-  questionTitle: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "700",
-    color: COLORS.text,
-  },
-
-  answerText: {
-    fontSize: 13,
-    lineHeight: 21,
-    color: "#626B79",
-  },
-
-  cardEyebrow: {
-    color: COLORS.accent,
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1.6,
-  },
-
-  audienceHeadline: {
-    marginTop: 9,
-    fontSize: 20,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: COLORS.text,
-    marginBottom: 15,
-  },
-
-  metricsGrid: {
+  questionHead: { flexDirection: "row", alignItems: "center", gap: space.md },
+  voiceHero: { borderRadius: radius.xl, overflow: "hidden", padding: 22 },
+  voiceGrid: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    marginTop: 16,
-    gap: 12,
+    gap: space.sm,
+    marginTop: space.lg,
+    paddingTop: space.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: midnight.line,
   },
-
-  metric: {
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
+  chip: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: radius.pill },
+  quote: { borderLeftWidth: 2, paddingLeft: space.md },
+  askRow: { flexDirection: "row", gap: 10, paddingVertical: space.md, alignItems: "flex-start" },
+  statStrip: {
+    flexDirection: "row",
+    paddingVertical: space.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  reelGrid: { flexDirection: "row", flexWrap: "wrap", gap: space.md },
+  reel: {
     flexGrow: 1,
-    flexBasis: "40%",
-    paddingVertical: 9,
-  },
-
-  metricValue: {
-    fontSize: 23,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  metricLabel: {
-    fontSize: 10,
-    color: COLORS.muted,
-    marginTop: 4,
-  },
-
-  netSentiment: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    marginTop: 14,
-    paddingTop: 13,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-
-  netSentimentLabel: {
-    color: COLORS.muted,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-
-  netSentimentValue: {
-    fontSize: 21,
-    fontWeight: "800",
-  },
-
-  updatedText: {
-    fontSize: 10,
-    color: COLORS.muted,
-    marginTop: 7,
-  },
-
-  sentimentRow: {
-    marginBottom: 15,
-  },
-
-  sentimentLabelRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 7,
-  },
-
-  sentimentLabel: {
-    color: COLORS.muted,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-
-  sentimentValue: {
-    color: COLORS.text,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  progressTrack: {
-    height: 7,
-    borderRadius: 10,
-    backgroundColor: "#ECEAE4",
+    flexBasis: "45%",
+    maxWidth: "48.5%",
+    aspectRatio: 9 / 14,
+    borderRadius: radius.lg,
     overflow: "hidden",
+    justifyContent: "flex-end",
   },
-
-  progressFill: {
-    height: "100%",
-    borderRadius: 10,
-  },
-
-  simpleRow: {
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-
-  quoteBox: {
-    backgroundColor: "#F7F6F2",
-    padding: 12,
-    borderRadius: 11,
-    marginBottom: 9,
-  },
-
-  tabRow: {
-    flexDirection: "row",
-    backgroundColor: "#ECEAE4",
-    borderRadius: 30,
-    padding: 4,
-    gap: 3,
-  },
-
-  trendTab: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: "center",
-    borderRadius: 25,
-  },
-
-  trendTabActive: {
-    backgroundColor: COLORS.text,
-  },
-
-  trendTabText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: COLORS.muted,
-  },
-
-  trendTabTextActive: {
-    color: "#FFFFFF",
-  },
-
-  reelGrid: {
-    gap: 12,
-  },
-
-  reelCard: {
-    position: "relative",
-  },
-
-  reelImage: {
-    width: "100%",
-    height: 240,
-    borderRadius: 12,
-    backgroundColor: "#171717",
-  },
-
-  noImage: {
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  noImageText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-  },
-
-  reelUsername: {
-    color: COLORS.text,
-    fontSize: 13,
-    fontWeight: "700",
-    marginTop: 11,
-  },
-
-  reelCaption: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 5,
-    lineHeight: 17,
-  },
-
-  reelStats: {
-    flexDirection: "row",
-    gap: 15,
-    marginTop: 10,
-  },
-
-  reelStat: {
-    fontSize: 10,
-    color: COLORS.muted,
-  },
-
-  favoriteButton: {
+  reelBlank: { alignItems: "center", justifyContent: "center", gap: 6 },
+  reelShade: { position: "absolute", left: 0, right: 0, bottom: 0, height: "62%" },
+  reelStar: {
     position: "absolute",
-    top: 20,
-    right: 20,
-    width: 37,
-    height: 37,
-    borderRadius: 20,
-    backgroundColor: "rgba(0,0,0,0.55)",
+    top: 8,
+    right: 8,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(0,0,28,0.5)",
     alignItems: "center",
     justifyContent: "center",
   },
-
-  favoriteIcon: {
-    color: "#FFFFFF",
-    fontSize: 23,
-  },
-
-  newsImage: {
-    height: 155,
-    width: "100%",
-    borderRadius: 10,
-    marginBottom: 12,
-  },
-
-  newsTitle: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: "700",
-    lineHeight: 21,
-  },
-
-  newsSource: {
-    fontSize: 10,
-    color: COLORS.muted,
-    marginTop: 9,
-  },
-
-  noteItem: {
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-
-  noteTopic: {
-    fontSize: 17,
-    fontWeight: "800",
-    color: COLORS.text,
-    marginBottom: 7,
-  },
-
-  newsletterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 13,
-  },
-
-  pdfIcon: {
-    width: 43,
-    height: 43,
-    backgroundColor: "#FCECE9",
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  pdfIconText: {
-    fontSize: 11,
-    fontWeight: "900",
-    color: COLORS.red,
-  },
-
-  newsletterTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: COLORS.text,
-  },
-
-  openIcon: {
-    fontSize: 21,
-    color: COLORS.muted,
-  },
-
-  emptyState: {
-    minHeight: 125,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderStyle: "dashed",
-    borderColor: "#D9D6CE",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 22,
-  },
-
-  emptyText: {
-    color: COLORS.muted,
-    fontSize: 12,
-    lineHeight: 20,
-    textAlign: "center",
-  },
-
-  loading: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  loadingText: {
-    color: COLORS.muted,
-    fontSize: 12,
-    marginTop: 12,
-  },
-
-  errorContainer: {
-    flex: 1,
-    padding: 25,
-    backgroundColor: COLORS.background,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  errorTitle: {
-    fontSize: 19,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  errorText: {
-    color: COLORS.muted,
-    fontSize: 12,
-    textAlign: "center",
-    marginTop: 9,
-  },
-
-  retryButton: {
-    marginTop: 18,
-    paddingHorizontal: 23,
-    paddingVertical: 12,
-    backgroundColor: COLORS.text,
-    borderRadius: 10,
-  },
-
-  retryText: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-    fontSize: 12,
-  },
-
-  footer: {
-    alignItems: "center",
-    paddingBottom: 30,
-  },
-
-  footerText: {
-    color: COLORS.muted,
-    fontSize: 10,
-  },
+  reelText: { padding: 12, gap: 3 },
+  reelStats: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 },
+  newsImage: { width: "100%", height: 160 },
+  newsBody: { flexDirection: "row", alignItems: "flex-start", gap: space.md, padding: space.lg },
+  letterRow: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.lg },
 });

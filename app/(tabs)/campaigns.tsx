@@ -1,218 +1,63 @@
-import React, {
-
-  useCallback,
-
-  useEffect,
-
-  useMemo,
-
-  useState,
-
-} from "react";
-
-
-
-import {
-
-  ActivityIndicator,
-
-  FlatList,
-
-  Pressable,
-
-  RefreshControl,
-
-  ScrollView,
-
-  StyleSheet,
-
-  Text,
-
-  TextInput,
-
-  View,
-
-} from "react-native";
-
-
-
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Linking, Platform, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
-
-
+import { LinearGradient } from "expo-linear-gradient";
 
 import { useAuth } from "../../src/context/AuthContext";
-
+import { useAppTheme } from "../../src/context/ThemeContext";
+import { getPortalCampaigns, type PortalCampaign } from "../../src/lib/api";
 import {
-
-  getPortalCampaigns,
-
-  type PortalCampaign,
-
-} from "../../src/lib/api";
-
-
-
-// --------------------------------------------------
-
-// TYPES
-
-// --------------------------------------------------
-
-
+  AvatarStack,
+  Card,
+  EmptyState,
+  ErrorState,
+  Hairline,
+  Pill,
+  Reveal,
+  ScreenScroll,
+  ScreenSkeleton,
+  ScreenTitle,
+  Segmented,
+  Sheet,
+  T,
+  Tap,
+  useTone,
+  initialOf,
+  type IconName,
+  type Tone,
+} from "../../src/ui/primitives";
+import { compactCount } from "../../src/ui/format";
+import { fonts, midnight, radius, space, springs } from "../../src/ui/theme";
 
 type ViewMode = "grid" | "board";
-
 type ServiceFilter = "all" | "im";
-
-
-
-type CampaignStage =
-
-  | "brief"
-
-  | "shortlisting"
-
-  | "production"
-
-  | "live"
-
-  | "completed";
-
-
+type CampaignStage = "brief" | "shortlisting" | "production" | "live" | "completed";
 
 type StageConfig = {
-
   key: CampaignStage;
-
   label: string;
-
-  color: string;
-
-  background: string;
-
+  tone: Tone;
   progress: number;
-
 };
-
-
-
-// --------------------------------------------------
-
-// CONSTANTS
-
-// --------------------------------------------------
-
-
-
-const COLORS = {
-
-  background: "#F7F5F0",
-
-  surface: "#FFFFFF",
-
-  text: "#20242B",
-
-  muted: "#858174",
-
-  border: "#E9E5DC",
-
-  navy: "#172F68",
-
-  gold: "#B47A12",
-
-  green: "#07834B",
-
-  soft: "#F3F2EE",
-
-  red: "#B42318",
-
-};
-
-
 
 const STAGES: StageConfig[] = [
-
-  {
-
-    key: "brief",
-
-    label: "Brief & Strategy",
-
-    color: "#777264",
-
-    background: "#F1F0EC",
-
-    progress: 8,
-
-  },
-
-  {
-
-    key: "shortlisting",
-
-    label: "Shortlisting",
-
-    color: "#B47A12",
-
-    background: "#F7EEDC",
-
-    progress: 16,
-
-  },
-
-  {
-
-    key: "production",
-
-    label: "Production",
-
-    color: "#263F83",
-
-    background: "#E9EDF7",
-
-    progress: 55,
-
-  },
-
-  {
-
-    key: "live",
-
-    label: "Live",
-
-    color: "#07834B",
-
-    background: "#E5F4EB",
-
-    progress: 85,
-
-  },
-
-  {
-
-    key: "completed",
-
-    label: "Completed",
-
-    color: "#888477",
-
-    background: "#F0EEE8",
-
-    progress: 100,
-
-  },
-
+  { key: "brief", label: "Brief & Strategy", tone: "neutral", progress: 8 },
+  { key: "shortlisting", label: "Shortlisting", tone: "warning", progress: 16 },
+  { key: "production", label: "Production", tone: "accent", progress: 55 },
+  { key: "live", label: "Live", tone: "success", progress: 85 },
+  { key: "completed", label: "Completed", tone: "neutral", progress: 100 },
 ];
-
-
-
-// --------------------------------------------------
 
 // HELPERS
 
 // --------------------------------------------------
-
-
 
 function normalizeStage(value?: string): CampaignStage {
   const stage = (value || "").toLowerCase().trim();
@@ -368,41 +213,9 @@ function formatBudget(value?: number | string | null) {
   })}`;
 }
 
-
 function formatCompact(value: number) {
-
-  if (value >= 1000000) {
-
-    return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1).replace(/\.0$/, "")}M`;
-
-  }
-
-
-
-  if (value >= 100000) {
-
-    return `${(value / 100000).toFixed(value >= 1000000 ? 0 : 1).replace(/\.0$/, "")}L`;
-
-  }
-
-
-
-  if (value >= 1000) {
-
-    return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1).replace(/\.0$/, "")}K`;
-
-  }
-
-
-
-  return String(value);
-
+  return compactCount(value);
 }
-
-
-
-
-
 
 function isInfluencerMarketing(campaign: PortalCampaign) {
 
@@ -414,29 +227,431 @@ function isInfluencerMarketing(campaign: PortalCampaign) {
 
 }
 
-
-
 function getCampaignIdentity(campaign: PortalCampaign, index: number) {
 
   return campaign.id || campaign._id || `${campaign.name || "campaign"}-${index}`;
 
 }
 
+function formatDay(value: unknown, withYear = true): string {
+  if (value === null || value === undefined || value === "" || typeof value === "object") return "—";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    ...(withYear ? { year: "numeric" } : null),
+  });
+}
 
+function dateRange(campaign: PortalCampaign): string {
+  if (campaign.start && campaign.end) {
+    return `${formatDay(campaign.start, false)} to ${formatDay(campaign.end)}`;
+  }
+  if (campaign.start) return `From ${formatDay(campaign.start)}`;
+  return "";
+}
 
-// --------------------------------------------------
+function shortRupees(value: number): string {
+  if (value >= 10_000_000) return `₹${(value / 10_000_000).toFixed(1).replace(/\.0$/, "")}Cr`;
+  if (value >= 100_000) return `₹${(value / 100_000).toFixed(1).replace(/\.0$/, "")}L`;
+  if (value >= 1_000) return `₹${(value / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return `₹${Math.round(value)}`;
+}
 
-// MAIN SCREEN
+function creatorNames(campaign: PortalCampaign): string[] {
+  return (Array.isArray(campaign.creators) ? campaign.creators : [])
+    .map((creator: any) => String(creator?.name || creator?.handle || "").trim())
+    .filter(Boolean);
+}
 
-// --------------------------------------------------
+// ---------------------------------------------------------------------------
+// Campaign card
+// ---------------------------------------------------------------------------
 
+function Fact({ value, label, warn }: { value: string; label: string; warn?: boolean }) {
+  const { colors } = useAppTheme();
+  return (
+    <View style={{ flex: 1 }}>
+      <T v="caption" tone="faint">
+        {label}
+      </T>
+      <T
+        v="bodyStrong"
+        color={warn ? colors.warning : colors.text}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {value}
+      </T>
+    </View>
+  );
+}
 
+/** The five phases as a strip, filled up to the current one. */
+function PhaseStrip({ stage, color, track }: { stage: CampaignStage; color: string; track: string }) {
+  const current = STAGES.findIndex((item) => item.key === stage);
+  return (
+    <View style={{ flexDirection: "row", gap: 4, flex: 1 }}>
+      {STAGES.map((item, index) => (
+        <View
+          key={item.key}
+          style={{
+            flex: 1,
+            height: 5,
+            borderRadius: 3,
+            backgroundColor: index <= current ? color : track,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+
+function CampaignCard({
+  campaign,
+  onOpen,
+}: {
+  campaign: PortalCampaign;
+  onOpen: (campaign: PortalCampaign) => void;
+}) {
+  const { colors } = useAppTheme();
+  const stage = getStageConfig(campaign.stage);
+  const { fg } = useTone(stage.tone);
+  const creatorsLabel = getCreatorCountLabel(campaign);
+  const reach = getTrackedViews(campaign);
+  const progress = getCampaignProgress(campaign);
+  const budget = formatBudget(campaign.budget);
+  const isPendingBudget = budget === "To be confirmed";
+  const names = creatorNames(campaign);
+  const dates = dateRange(campaign);
+
+  return (
+    <Tap
+      onPress={() => onOpen(campaign)}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${campaign.name || "campaign"} details`}
+      scaleTo={0.98}
+    >
+      <Card style={{ gap: space.md }}>
+        <View style={styles.rowBetween}>
+          <Pill label={stage.label} tone={stage.tone} live={stage.key === "live"} />
+          {dates ? (
+            <T v="caption" tone="faint" numberOfLines={1}>
+              {dates}
+            </T>
+          ) : null}
+        </View>
+
+        <View>
+          <T v="heading" numberOfLines={2}>
+            {campaign.name || "Untitled campaign"}
+          </T>
+          <T v="caption" tone="faint" numberOfLines={1}>
+            {[campaign.service || "Campaign", campaign.region].filter(Boolean).join(", ")}
+          </T>
+        </View>
+
+        <View style={styles.progressRow}>
+          <PhaseStrip stage={stage.key} color={fg} track={colors.well} />
+          <T v="label" color={fg} style={{ fontFamily: fonts.sansSemi, minWidth: 38, textAlign: "right" }}>
+            {progress}%
+          </T>
+        </View>
+
+        <View style={[styles.facts, { backgroundColor: colors.well }]}>
+          <Fact value={creatorsLabel} label="Creators" />
+          <Fact value={isPendingBudget ? "To confirm" : budget} label="Budget" warn={isPendingBudget} />
+          <Fact value={reach > 0 ? formatCompact(reach) : "—"} label="Views" />
+        </View>
+
+        <View style={styles.rowBetween}>
+          {names.length > 0 ? (
+            <AvatarStack names={names} max={4} size={30} />
+          ) : (
+            <T v="caption" tone="faint">
+              No creators added yet
+            </T>
+          )}
+          <View style={styles.more}>
+            <T v="label" tone="accent">
+              View details
+            </T>
+            <Ionicons name="chevron-forward" size={14} color={colors.accent} />
+          </View>
+        </View>
+      </Card>
+    </Tap>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Campaign details (opens as a sheet)
+// ---------------------------------------------------------------------------
+
+function CampaignDetails({ campaign }: { campaign: PortalCampaign }) {
+  const { colors } = useAppTheme();
+  const campaignData = campaign as PortalCampaign & Record<string, any>;
+  const detailCreators = Array.isArray(campaignData.creators) ? campaignData.creators : [];
+  const detailStage = getStageConfig(campaignData.stage);
+  const detailProgress = getCampaignProgress(campaign);
+  const detailBudget = formatBudget(campaignData.budget);
+  const detailReach = getTrackedViews(campaign);
+  const detailCreatorsLabel = getCreatorCountLabel(campaign);
+  const stageIndex = STAGES.findIndex((stage) => stage.key === detailStage.key);
+
+  const displayValue = (value: unknown) => {
+    if (value === null || value === undefined || value === "") return "—";
+    if (typeof value === "object") return "—";
+    return String(value);
+  };
+
+  const creatorName = (creator: any, index: number) =>
+    creator?.name || creator?.fullName || creator?.username || creator?.handle || `Creator ${index + 1}`;
+
+  const figures: [string, string][] = [
+    ["Budget", detailBudget],
+    ["Creators", detailCreatorsLabel],
+    ["Tracked views", detailReach > 0 ? formatCompact(detailReach) : "—"],
+    ["Progress", `${detailProgress}%`],
+  ];
+
+  const info: [string, string][] = [
+    ["Service", displayValue(campaign.service)],
+    ["Region", displayValue(campaign.region)],
+    ["Starts", formatDay(campaignData.start)],
+    ["Ends", formatDay(campaignData.end)],
+  ];
+
+  const brief = campaign.brief;
+  const briefRows: [string, string][] = brief
+    ? ([
+        ["Objective", brief.objective],
+        ["Audience", brief.audience],
+        ["Key messages", brief.messages],
+        ["Deliverables", Array.isArray(brief.deliverables) ? brief.deliverables.join(", ") : ""],
+        ["Timeline", brief.timeline],
+      ].filter(([, value]) => typeof value === "string" && value.trim()) as [string, string][])
+    : [];
+
+  return (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={{ padding: space.xl, paddingTop: 4, gap: space.lg }}
+    >
+      <Animated.View entering={FadeInDown.delay(120).duration(420)} style={styles.detailHero}>
+        <LinearGradient
+          colors={[midnight.top, midnight.mid, midnight.bottom]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        <T v="caption" color={midnight.muted}>
+          {[campaign.service || "Campaign", campaign.region].filter(Boolean).join(", ")}
+        </T>
+        <T v="title" color={midnight.text} style={{ marginTop: 4 }}>
+          {campaign.name || "Untitled campaign"}
+        </T>
+
+        {/* The five phases every campaign moves through, in order */}
+        <View style={styles.phases}>
+          {STAGES.map((stage, index) => {
+            const done = index < stageIndex;
+            const current = index === stageIndex;
+            return (
+              <View key={stage.key} style={styles.phase}>
+                <View
+                  style={[
+                    styles.phaseBar,
+                    {
+                      backgroundColor: done || current ? midnight.lamp : midnight.line,
+                      opacity: done ? 0.55 : 1,
+                    },
+                  ]}
+                />
+                <T
+                  numberOfLines={1}
+                  color={current ? midnight.text : midnight.faint}
+                  style={{ fontFamily: current ? fonts.sansSemi : fonts.sans, fontSize: 9.5, lineHeight: 13 }}
+                >
+                  {stage.label.split(" ")[0]}
+                </T>
+              </View>
+            );
+          })}
+        </View>
+      </Animated.View>
+
+      <View style={styles.figureGrid}>
+        {figures.map(([label, value], index) => (
+          <Animated.View
+            key={label}
+            entering={FadeInDown.delay(180 + index * 50).duration(380)}
+            style={[styles.figureCell, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <T v="caption" tone="faint">
+              {label}
+            </T>
+            <T v="figureSm" numberOfLines={1} adjustsFontSizeToFit>
+              {value}
+            </T>
+          </Animated.View>
+        ))}
+      </View>
+
+      <Card pad={0}>
+        {info.map(([label, value], index) => (
+          <View key={label}>
+            {index > 0 ? <Hairline style={{ marginLeft: space.lg }} /> : null}
+            <View style={styles.infoRow}>
+              <T tone="muted">{label}</T>
+              <T v="bodyStrong" style={{ flex: 1, textAlign: "right" }} numberOfLines={2}>
+                {value}
+              </T>
+            </View>
+          </View>
+        ))}
+      </Card>
+
+      {briefRows.length > 0 ? (
+        <>
+          <T v="heading">The brief</T>
+          <Card style={{ gap: space.md }}>
+            {briefRows.map(([label, value]) => (
+              <View key={label} style={{ gap: 2 }}>
+                <T v="label" tone="muted">
+                  {label}
+                </T>
+                <T>{value}</T>
+              </View>
+            ))}
+          </Card>
+        </>
+      ) : null}
+
+      <View style={styles.rowBetween}>
+        <T v="heading">Creators</T>
+        <T v="label" tone="faint">
+          {detailCreators.length}
+        </T>
+      </View>
+
+      {detailCreators.length === 0 ? (
+        <T tone="muted">No creators have been added to this campaign yet.</T>
+      ) : (
+        <Card pad={0}>
+          {detailCreators.map((creator: any, index: number) => {
+            const name = creatorName(creator, index);
+            const postUrl: string | undefined =
+              creator?.live?.postUrl || creator?.live?.postUrls?.[0] || undefined;
+            const views = Number(creator?.tracking?.views);
+            const row = (
+              <View style={styles.creatorRow}>
+                <View style={[styles.creatorAvatar, { backgroundColor: colors.accentMuted }]}>
+                  <T v="subhead" tone="accent">
+                    {initialOf(name)}
+                  </T>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <T v="bodyStrong" numberOfLines={1}>
+                    {name}
+                  </T>
+                  <T v="caption" tone="faint" numberOfLines={1}>
+                    {displayValue(creator?.platform)}
+                    {creator?.followers !== undefined
+                      ? `, ${displayValue(creator.followers)} followers`
+                      : ""}
+                  </T>
+                </View>
+                {postUrl ? (
+                  <View style={{ alignItems: "flex-end", gap: 2 }}>
+                    <Pill label="Live" tone="success" live />
+                    {Number.isFinite(views) && views > 0 ? (
+                      <T v="caption" tone="muted">
+                        {formatCompact(views)} views
+                      </T>
+                    ) : null}
+                  </View>
+                ) : null}
+                {postUrl ? <Ionicons name="open-outline" size={16} color={colors.muted} /> : null}
+              </View>
+            );
+            return (
+              <View key={creator?._id || creator?.id || index}>
+                {index > 0 ? <Hairline style={{ marginLeft: 68 }} /> : null}
+                {postUrl ? (
+                  <Tap
+                    accessibilityRole="link"
+                    accessibilityLabel={`Open ${name}'s post`}
+                    scaleTo={0.985}
+                    onPress={() => Linking.openURL(postUrl).catch(() => {})}
+                  >
+                    {row}
+                  </Tap>
+                ) : (
+                  row
+                )}
+              </View>
+            );
+          })}
+        </Card>
+      )}
+    </ScrollView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Completed section toggle
+// ---------------------------------------------------------------------------
+
+function Disclosure({
+  title,
+  note,
+  open,
+  onToggle,
+}: {
+  title: string;
+  note: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const turn = useSharedValue(open ? 1 : 0);
+  useEffect(() => {
+    turn.value = withSpring(open ? 1 : 0, springs.snappy);
+  }, [open, turn]);
+  const chevron = useAnimatedStyle(() => ({ transform: [{ rotate: `${turn.value * 90}deg` }] }));
+  return (
+    <Tap
+      accessibilityRole="button"
+      accessibilityState={{ expanded: open }}
+      onPress={onToggle}
+      scaleTo={0.985}
+      style={[styles.disclosure, { borderColor: colors.borderStrong }]}
+    >
+      <Animated.View style={chevron}>
+        <Ionicons name="chevron-forward" size={18} color={colors.text} />
+      </Animated.View>
+      <View style={{ flex: 1 }}>
+        <T v="subhead">{title}</T>
+        <T v="caption" tone="faint">
+          {note}
+        </T>
+      </View>
+      <T v="label" tone="accent">
+        {open ? "Hide" : "Show"}
+      </T>
+    </Tap>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
 
 export default function CampaignsScreen() {
 
   const { user } = useAuth();
-
-
 
   const [campaigns, setCampaigns] = useState<PortalCampaign[]>([]);
 
@@ -446,30 +661,22 @@ export default function CampaignsScreen() {
 
   const [error, setError] = useState("");
 
-
-
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
   const [serviceFilter, setServiceFilter] =
 
     useState<ServiceFilter>("all");
 
-
-
   const [search, setSearch] = useState("");
 
   const [completedExpanded, setCompletedExpanded] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState<PortalCampaign | null>(null);
-
-
 
   // ------------------------------------------------
 
   // FETCH CAMPAIGNS
 
   // ------------------------------------------------
-
-
 
   const fetchCampaigns = useCallback(async (isRefresh = false) => {
 
@@ -479,13 +686,11 @@ export default function CampaignsScreen() {
 
       setLoading(false);
 
-      setError("Client information is unavailable. Please sign in again.");
+      setError("Your account details are unavailable. Please sign in again.");
 
       return;
 
     }
-
-
 
     if (isRefresh) {
 
@@ -497,11 +702,7 @@ export default function CampaignsScreen() {
 
     }
 
-
-
     setError("");
-
-
 
     try {
 
@@ -512,8 +713,6 @@ export default function CampaignsScreen() {
         clientName: user.clientName,
 
       });
-
-
 
       setCampaigns(Array.isArray(result) ? result : []);
 
@@ -539,15 +738,11 @@ export default function CampaignsScreen() {
 
   }, [user?.brandId, user?.clientName]);
 
-
-
   useEffect(() => {
 
     fetchCampaigns();
 
   }, [fetchCampaigns]);
-
-
 
   // ------------------------------------------------
 
@@ -555,13 +750,9 @@ export default function CampaignsScreen() {
 
   // ------------------------------------------------
 
-
-
   const visibleCampaigns = useMemo(() => {
 
     const query = search.trim().toLowerCase();
-
-
 
     return campaigns.filter((campaign) => {
 
@@ -570,8 +761,6 @@ export default function CampaignsScreen() {
         serviceFilter === "all" ||
 
         isInfluencerMarketing(campaign);
-
-
 
       const matchesSearch =
 
@@ -583,23 +772,17 @@ export default function CampaignsScreen() {
 
         (campaign.region || "").toLowerCase().includes(query);
 
-
-
       return matchesService && matchesSearch;
 
     });
 
   }, [campaigns, search, serviceFilter]);
 
-
-
   // ------------------------------------------------
 
   // GROUP CAMPAIGNS
 
   // ------------------------------------------------
-
-
 
   const completedCampaigns = useMemo(
 
@@ -615,8 +798,6 @@ export default function CampaignsScreen() {
 
   );
 
-
-
   const activeCampaigns = useMemo(
 
     () =>
@@ -630,8 +811,6 @@ export default function CampaignsScreen() {
     [visibleCampaigns]
 
   );
-
-
 
   const stageGroups = useMemo(() => {
 
@@ -649,2215 +828,311 @@ export default function CampaignsScreen() {
 
   }, [visibleCampaigns]);
 
+  const { colors } = useAppTheme();
 
+  // One simple filter: the phase a campaign is in.
+  const [phase, setPhase] = useState<"all" | CampaignStage>("all");
 
-  // ------------------------------------------------
-
-  // HEADER
-
-  // ------------------------------------------------
-
-
-
-  const renderPageHeader = () => (
-
-    <View style={styles.pageHeader}>
-
-      <View style={styles.headingLeft}>
-
-        <Text style={styles.eyebrow}>
-
-          CAMPAIGNS · {campaigns.length} TOTAL
-
-        </Text>
-
-
-
-        <Text style={styles.pageTitle}>Campaigns</Text>
-
-
-
-        <Text style={styles.pageSubtitle}>
-
-          Track your campaigns from brief to completion.
-
-        </Text>
-
-      </View>
-
-
-
-      <View style={styles.countSummary}>
-
-        <View style={styles.countItem}>
-
-          <Text style={styles.countNumber}>
-
-            {activeCampaigns.length}
-
-          </Text>
-
-          <Text style={styles.countLabel}>Active</Text>
-
-        </View>
-
-
-
-        <View style={styles.countDivider} />
-
-
-
-        <View style={styles.countItem}>
-
-          <Text style={styles.countNumber}>
-
-            {completedCampaigns.length}
-
-          </Text>
-
-          <Text style={styles.countLabel}>Done</Text>
-
-        </View>
-
-      </View>
-
-    </View>
-
+  const summary = useMemo(
+    () => ({
+      active: campaigns.filter((campaign) => normalizeStage(campaign.stage) !== "completed").length,
+      budget: campaigns.reduce((sum, campaign) => {
+        const amount = Number(campaign.budget);
+        return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+      }, 0),
+      views: campaigns.reduce((sum, campaign) => sum + getTrackedViews(campaign), 0),
+    }),
+    [campaigns]
   );
-
-
-
-  // ------------------------------------------------
-
-  // FILTER BAR
-
-  // ------------------------------------------------
-
-
-
-  const renderFilters = () => (
-
-    <View style={styles.filterArea}>
-
-      <View style={styles.searchContainer}>
-
-        <Ionicons
-
-          name="search-outline"
-
-          size={19}
-
-          color={COLORS.muted}
-
-        />
-
-
-
-        <TextInput
-
-          value={search}
-
-          onChangeText={setSearch}
-
-          placeholder="Search campaigns..."
-
-          placeholderTextColor="#A09B90"
-
-          style={styles.searchInput}
-
-          returnKeyType="search"
-
-        />
-
-
-
-        {!!search && (
-
-          <Pressable onPress={() => setSearch("")}>
-
-            <Ionicons
-
-              name="close-circle"
-
-              size={19}
-
-              color={COLORS.muted}
-
-            />
-
-          </Pressable>
-
-        )}
-
-      </View>
-
-
-
-      <View style={styles.filterAndViewRow}>
-
-        <View style={styles.serviceFilters}>
-
-          <Pressable
-
-            onPress={() => setServiceFilter("all")}
-
-            style={[
-
-              styles.filterButton,
-
-              serviceFilter === "all" && styles.filterButtonActive,
-
-            ]}
-
-          >
-
-            <Text
-
-              style={[
-
-                styles.filterText,
-
-                serviceFilter === "all" && styles.filterTextActive,
-
-              ]}
-
-            >
-
-              All
-
-            </Text>
-
-          </Pressable>
-
-
-
-          <Pressable
-
-            onPress={() => setServiceFilter("im")}
-
-            style={[
-
-              styles.filterButton,
-
-              serviceFilter === "im" && styles.filterButtonActive,
-
-            ]}
-
-          >
-
-            <Text
-
-              style={[
-
-                styles.filterText,
-
-                serviceFilter === "im" && styles.filterTextActive,
-
-              ]}
-
-            >
-
-              IM
-
-            </Text>
-
-          </Pressable>
-
-        </View>
-
-
-
-        <View style={styles.viewToggle}>
-
-          <Pressable
-
-            onPress={() => setViewMode("grid")}
-
-            style={[
-
-              styles.viewButton,
-
-              viewMode === "grid" && styles.viewButtonActive,
-
-            ]}
-
-          >
-
-            <Ionicons
-
-              name="grid-outline"
-
-              size={16}
-
-              color={viewMode === "grid" ? COLORS.navy : COLORS.muted}
-
-            />
-
-            <Text
-
-              style={[
-
-                styles.viewButtonText,
-
-                viewMode === "grid" && styles.viewButtonTextActive,
-
-              ]}
-
-            >
-
-              Grid
-
-            </Text>
-
-          </Pressable>
-
-
-
-          <Pressable
-
-            onPress={() => setViewMode("board")}
-
-            style={[
-
-              styles.viewButton,
-
-              viewMode === "board" && styles.viewButtonActive,
-
-            ]}
-
-          >
-
-            <Ionicons
-
-              name="albums-outline"
-
-              size={16}
-
-              color={viewMode === "board" ? COLORS.navy : COLORS.muted}
-
-            />
-
-            <Text
-
-              style={[
-
-                styles.viewButtonText,
-
-                viewMode === "board" && styles.viewButtonTextActive,
-
-              ]}
-
-            >
-
-              Board
-
-            </Text>
-
-          </Pressable>
-
-        </View>
-
-      </View>
-
-    </View>
-
-  );
-
-
-
-  // ------------------------------------------------
-
-  // CAMPAIGN CARD
-
-  // ------------------------------------------------
-
-
-
-  const renderCampaignCard = (
-
-    campaign: PortalCampaign,
-
-    index: number,
-
-    compact = false
-
-  ) => {
-
-    const stage = getStageConfig(campaign.stage);
-
-    const creatorsLabel = getCreatorCountLabel(campaign);
-
-    const reach = getTrackedViews(campaign);
-
-    const progress = getCampaignProgress(campaign);
-
-    const budget = formatBudget(campaign.budget);
-
-
-
-    const isPendingBudget = budget === "To be confirmed";
-
-
-
-    return (
-
-      <Pressable
-
-        key={getCampaignIdentity(campaign, index)}
-
-        onPress={() => setSelectedCampaign(campaign)}
-
-        accessibilityRole="button"
-
-        accessibilityLabel={`Open ${campaign.name || "campaign"} details`}
-
-        style={[
-
-          styles.campaignCard,
-
-          compact && styles.compactCampaignCard,
-
-        ]}
-
-      >
-
-        <View style={styles.cardTop}>
-
-          <View style={styles.cardTitleArea}>
-
-            <Text
-
-              style={styles.campaignTitle}
-
-              numberOfLines={2}
-
-            >
-
-              {campaign.name || "Untitled campaign"}
-
-            </Text>
-
-
-
-            <Text style={styles.campaignService} numberOfLines={1}>
-
-              {campaign.service || "Campaign"}
-
-              {campaign.region ? ` · ${campaign.region}` : ""}
-
-            </Text>
-
-          </View>
-
-
-
-          <View
-
-            style={[
-
-              styles.progressCircle,
-
-              { borderColor: stage.color },
-
-            ]}
-
-          >
-
-            <Text
-
-              style={[
-
-                styles.progressText,
-
-                { color: stage.color },
-
-              ]}
-
-            >
-
-              {progress}%
-
-            </Text>
-
-          </View>
-
-        </View>
-
-
-
-        <View style={styles.statusRow}>
-
-          <View
-
-            style={[
-
-              styles.statusPill,
-
-              { backgroundColor: stage.background },
-
-            ]}
-
-          >
-
-            <View
-
-              style={[
-
-                styles.statusDot,
-
-                { backgroundColor: stage.color },
-
-              ]}
-
-            />
-
-
-
-            <Text
-
-              style={[
-
-                styles.statusText,
-
-                { color: stage.color },
-
-              ]}
-
-            >
-
-              {stage.label}
-
-            </Text>
-
-          </View>
-
-        </View>
-
-
-
-        <View style={styles.metricsContainer}>
-
-          <Metric
-
-            icon="people-outline"
-
-            value={creatorsLabel}
-
-            label="Creators"
-
-          />
-
-
-
-          <Metric
-
-            icon="wallet-outline"
-
-            value={budget}
-
-            label="Budget"
-
-            valueColor={isPendingBudget ? COLORS.gold : COLORS.text}
-
-          />
-
-
-
-          <Metric
-
-            icon="eye-outline"
-
-            value={reach > 0 ? formatCompact(reach) : "—"}
-
-            label="Est. Reach"
-
-          />
-
-        </View>
-
-
-
-        <View style={styles.progressTrack}>
-
-          <View
-
-            style={[
-
-              styles.progressFill,
-
-              {
-
-                width: `${progress}%`,
-
-                backgroundColor: stage.color,
-
-              },
-
-            ]}
-
-          />
-
-        </View>
-
-      </Pressable>
-
-    );
-
-  };
-
-
-
-  // ------------------------------------------------
-
-  // --------------------------------------------------
-  // CAMPAIGN DETAILS
-  // --------------------------------------------------
-
-  if (selectedCampaign) {
-    const campaignData = selectedCampaign as PortalCampaign & Record<string, any>;
-    const detailCreators = Array.isArray(campaignData.creators) ? campaignData.creators : [];
-    const detailStage = getStageConfig(campaignData.stage);
-    const detailProgress = getCampaignProgress(selectedCampaign);
-    const detailBudget = formatBudget(campaignData.budget);
-    const detailReach = getTrackedViews(selectedCampaign);
-    const detailCreatorsLabel = getCreatorCountLabel(selectedCampaign);
-
-    const displayValue = (value: unknown) => {
-      if (value === null || value === undefined || value === "") return "—";
-      if (typeof value === "object") return "—";
-      return String(value);
-    };
-
-    const creatorName = (creator: any, index: number) =>
-      creator?.name || creator?.fullName || creator?.username ||
-      creator?.handle || `Creator ${index + 1}`;
-
-    return (
-      <View style={styles.screen}>
-        <ScrollView contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator={false}>
-          <Pressable onPress={() => setSelectedCampaign(null)} style={styles.detailBackButton}>
-            <Ionicons name="arrow-back" size={19} color={COLORS.navy} />
-            <Text style={styles.detailBackText}>Back to campaigns</Text>
-          </Pressable>
-
-          <View style={styles.detailHero}>
-            <Text style={styles.detailEyebrow}>CAMPAIGN DETAILS</Text>
-            <Text style={styles.detailTitle}>{selectedCampaign.name || "Untitled campaign"}</Text>
-            <Text style={styles.detailSubtitle}>
-              {selectedCampaign.service || "Campaign"}
-              {selectedCampaign.region ? ` · ${selectedCampaign.region}` : ""}
-            </Text>
-            <View style={[styles.detailStatusPill, { backgroundColor: detailStage.background }]}>
-              <View style={[styles.statusDot, { backgroundColor: detailStage.color }]} />
-              <Text style={[styles.statusText, { color: detailStage.color }]}>{detailStage.label}</Text>
-            </View>
-          </View>
-
-          <View style={styles.detailSection}>
-            <Text style={styles.detailSectionTitle}>Overview</Text>
-            <View style={styles.detailGrid}>
-              <View style={styles.detailMetric}><Text style={styles.detailLabel}>Budget</Text><Text style={styles.detailValue}>{detailBudget}</Text></View>
-              <View style={styles.detailMetric}><Text style={styles.detailLabel}>Creators</Text><Text style={styles.detailValue}>{detailCreatorsLabel}</Text></View>
-              <View style={styles.detailMetric}>
-                <Text style={styles.detailLabel}>Estimated reach</Text>
-                <Text style={styles.detailValue}>{detailReach > 0 ? formatCompact(detailReach) : "—"}</Text>
-              </View>
-              <View style={styles.detailMetric}><Text style={styles.detailLabel}>Progress</Text><Text style={styles.detailValue}>{detailProgress}%</Text></View>
-            </View>
-          </View>
-
-          <View style={styles.detailSection}>
-            <Text style={styles.detailSectionTitle}>Campaign information</Text>
-            {[
-              ["Service", selectedCampaign.service],
-              ["Region", selectedCampaign.region],
-              ["Stage", selectedCampaign.stage],
-              ["Start date", campaignData.start],
-              ["End date", campaignData.end],
-              ["Budget", detailBudget],
-            ].map(([label, value]) => (
-              <View key={label} style={styles.detailInfoRow}>
-                <Text style={styles.detailLabel}>{label}</Text>
-                <Text style={styles.detailInfoValue}>{displayValue(value)}</Text>
-              </View>
-            ))}
-          </View>
-
-          <View style={styles.detailSection}>
-            <View style={styles.detailCreatorHeader}>
-              <Text style={styles.detailSectionTitle}>Creators</Text>
-              <Text style={styles.detailCreatorCount}>{detailCreators.length}</Text>
-            </View>
-            {detailCreators.length === 0 ? (
-              <Text style={styles.detailEmptyText}>No creators added to this campaign yet.</Text>
-            ) : detailCreators.map((creator: any, index: number) => (
-              <View key={creator?._id || creator?.id || index} style={styles.detailCreatorRow}>
-                <View style={styles.detailCreatorAvatar}>
-                  <Text style={styles.detailCreatorInitial}>{creatorName(creator, index).charAt(0).toUpperCase()}</Text>
-                </View>
-                <View style={styles.detailCreatorInfo}>
-                  <Text style={styles.detailCreatorName}>{creatorName(creator, index)}</Text>
-                  <Text style={styles.detailCreatorMeta}>
-                    {displayValue(creator?.platform)}
-                    {creator?.followers !== undefined ? ` · ${displayValue(creator.followers)} followers` : ""}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      </View>
-    );
-  }
-
-  // GRID VIEW
-
-  // ------------------------------------------------
-
-
-
-  const renderGridView = () => (
-
-    <View>
-
-      <View style={styles.sectionHeading}>
-
-        <Text style={styles.sectionTitle}>Active campaigns</Text>
-
-
-
-        <View style={styles.sectionCount}>
-
-          <Text style={styles.sectionCountText}>
-
-            {activeCampaigns.length} campaigns
-
-          </Text>
-
-        </View>
-
-      </View>
-
-
-
-      {activeCampaigns.length === 0 ? (
-
-        <EmptySection message="No active campaigns found." />
-
-      ) : (
-
-        activeCampaigns.map((campaign, index) =>
-
-          renderCampaignCard(campaign, index)
-
-        )
-
-      )}
-
-
-
-      <View style={styles.completedSection}>
-
-        <Pressable
-
-          onPress={() => setCompletedExpanded((prev) => !prev)}
-
-          style={styles.completedHeader}
-
-        >
-
-          <View style={styles.completedHeaderLeft}>
-
-            <Ionicons
-
-              name={completedExpanded ? "chevron-down" : "chevron-forward"}
-
-              size={20}
-
-              color={COLORS.text}
-
-            />
-
-
-
-            <View>
-
-              <Text style={styles.completedTitle}>
-
-                Completed campaigns
-
-              </Text>
-
-              <Text style={styles.completedSubtitle}>
-
-                {completedCampaigns.length} campaigns
-
-              </Text>
-
-            </View>
-
-          </View>
-
-
-
-          <Text style={styles.expandLabel}>
-
-            {completedExpanded ? "Hide" : "Show"}
-
-          </Text>
-
-        </Pressable>
-
-
-
-        {completedExpanded && (
-
-          <View style={styles.completedContent}>
-
-            {completedCampaigns.length === 0 ? (
-
-              <EmptySection message="No completed campaigns found." />
-
-            ) : (
-
-              completedCampaigns.map((campaign, index) =>
-
-                renderCampaignCard(campaign, index, true)
-
-              )
-
-            )}
-
-          </View>
-
-        )}
-
-      </View>
-
-    </View>
-
-  );
-
-
-
-  // ------------------------------------------------
-
-  // BOARD VIEW
-
-  // ------------------------------------------------
-
-
-
-  const renderBoardView = () => (
-
-    <View style={styles.boardContainer}>
-
-      <Text style={styles.boardHint}>
-
-        Swipe horizontally to explore campaign stages.
-
-      </Text>
-
-
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.boardScrollView}
-        contentContainerStyle={styles.boardScrollContent}
-      >
-
-        {stageGroups.map((group) => (
-
-          <View
-
-            key={group.key}
-
-            style={styles.boardColumn}
-
-          >
-
-            <View style={styles.boardColumnHeader}>
-
-              <View style={styles.boardColumnTitleArea}>
-
-                <View
-
-                  style={[
-
-                    styles.boardStageDot,
-
-                    { backgroundColor: group.color },
-
-                  ]}
-
-                />
-
-
-
-                <Text
-
-                  style={[
-
-                    styles.boardColumnTitle,
-
-                    { color: group.color },
-
-                  ]}
-
-                >
-
-                  {group.label}
-
-                </Text>
-
-              </View>
-
-
-
-              <View style={styles.boardCount}>
-
-                <Text style={styles.boardCountText}>
-
-                  {group.campaigns.length}
-
-                </Text>
-
-              </View>
-
-            </View>
-
-
-
-            {group.key === "completed" && group.campaigns.length > 0 && (
-
-              <Text style={styles.boardCompletedNote}>
-
-                Completed campaigns
-
-              </Text>
-
-            )}
-
-
-
-            {group.campaigns.map((campaign, index) =>
-
-              renderCampaignCard(campaign, index, true)
-
-            )}
-
-          </View>
-
-        ))}
-
-      </ScrollView>
-
-    </View>
-
-  );
-
-
-
-  // ------------------------------------------------
-
-  // LOADING
-
-  // ------------------------------------------------
-
-
 
   if (loading) {
-
-    return (
-
-      <View style={styles.centerState}>
-
-        <ActivityIndicator
-
-          size="large"
-
-          color={COLORS.navy}
-
-        />
-
-        <Text style={styles.stateText}>
-
-          Loading your campaigns...
-
-        </Text>
-
-      </View>
-
-    );
-
+    return <ScreenSkeleton hero={false} />;
   }
 
+  if (error && campaigns.length === 0) {
+    return (
+      <ErrorState
+        title="Campaigns did not load"
+        message={error}
+        onRetry={() => fetchCampaigns()}
+      />
+    );
+  }
 
+  const plural = (count: number) => `${count} campaign${count === 1 ? "" : "s"}`;
 
-  // ------------------------------------------------
-
-  // MAIN RENDER
-
-  // ------------------------------------------------
-
-
+  const chips: { key: "all" | CampaignStage; label: string; count: number }[] = [
+    { key: "all", label: "All", count: visibleCampaigns.length },
+    ...stageGroups
+      .filter((group) => group.campaigns.length > 0)
+      .map((group) => ({
+        key: group.key,
+        label: group.label.split(" ")[0],
+        count: group.campaigns.length,
+      })),
+  ];
+  const activePhase = chips.some((chip) => chip.key === phase) ? phase : "all";
+  const phaseList =
+    activePhase === "all"
+      ? []
+      : visibleCampaigns.filter((campaign) => normalizeStage(campaign.stage) === activePhase);
 
   return (
+    <>
+      <ScreenScroll refreshing={refreshing} onRefresh={() => fetchCampaigns(true)}>
+        <ScreenTitle title="Campaigns" note="Tap any campaign to see its creators, brief and numbers." />
 
-    <View style={styles.screen}>
-
-      <FlatList
-
-        data={[{ key: "campaign-content" }]}
-
-        keyExtractor={(item) => item.key}
-
-        renderItem={() => (
-
-          <View>
-
-            {renderPageHeader()}
-
-            {renderFilters()}
-
-
-
-            {error ? (
-
-              <View style={styles.errorContainer}>
-
-                <Ionicons
-
-                  name="alert-circle-outline"
-
-                  size={28}
-
-                  color={COLORS.red}
-
-                />
-
-
-
-                <Text style={styles.errorText}>{error}</Text>
-
-
-
-                <Pressable
-
-                  style={styles.retryButton}
-
-                  onPress={() => fetchCampaigns()}
-
+        {campaigns.length > 0 ? (
+          <Reveal index={1}>
+            <View style={styles.summary}>
+              <LinearGradient
+                colors={[midnight.top, midnight.mid, midnight.bottom]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+              {(
+                [
+                  ["Active", String(summary.active)],
+                  ["Total budget", summary.budget > 0 ? shortRupees(summary.budget) : "—"],
+                  ["Tracked views", summary.views > 0 ? formatCompact(summary.views) : "—"],
+                ] as const
+              ).map(([label, value], index) => (
+                <View
+                  key={label}
+                  style={[
+                    styles.summaryCell,
+                    index > 0 && { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: midnight.line },
+                  ]}
                 >
+                  <T v="figureSm" color={index === 0 ? midnight.lamp : midnight.text} numberOfLines={1} adjustsFontSizeToFit>
+                    {value}
+                  </T>
+                  <T v="caption" color={midnight.muted}>
+                    {label}
+                  </T>
+                </View>
+              ))}
+            </View>
+          </Reveal>
+        ) : null}
 
-                  <Text style={styles.retryText}>Try again</Text>
-
-                </Pressable>
-
-              </View>
-
-            ) : visibleCampaigns.length === 0 ? (
-
-              <View style={styles.emptyContainer}>
-
-                <Ionicons
-
-                  name="file-tray-outline"
-
-                  size={42}
-
-                  color="#AAA59A"
-
-                />
-
-
-
-                <Text style={styles.emptyTitle}>
-
-                  No campaigns found
-
-                </Text>
-
-
-
-                <Text style={styles.emptyDescription}>
-
-                  {search || serviceFilter !== "all"
-
-                    ? "Try changing your search or filter."
-
-                    : "Your campaigns will appear here when available."}
-
-                </Text>
-
-              </View>
-
-            ) : viewMode === "grid" ? (
-
-              renderGridView()
-
-            ) : (
-
-              renderBoardView()
-
-            )}
-
+        <Reveal index={2} style={{ gap: space.md }}>
+          <View
+            style={[
+              styles.search,
+              { backgroundColor: colors.input, borderColor: colors.borderStrong },
+            ]}
+          >
+            <Ionicons name="search-outline" size={18} color={colors.muted} />
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search campaigns"
+              placeholderTextColor={colors.faint}
+              selectionColor={colors.accent}
+              accessibilityLabel="Search campaigns"
+              style={[styles.searchInput, { color: colors.text }]}
+              returnKeyType="search"
+            />
+            {search ? (
+              <Tap accessibilityLabel="Clear search" onPress={() => setSearch("")} hitSlop={10}>
+                <Ionicons name="close-circle" size={18} color={colors.muted} />
+              </Tap>
+            ) : null}
           </View>
 
-        )}
+          {chips.length > 2 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginHorizontal: -space.xl }}
+              contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}
+            >
+              {chips.map((chip) => {
+                const selected = chip.key === activePhase;
+                return (
+                  <Tap
+                    key={chip.key}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`${chip.label}, ${plural(chip.count)}`}
+                    onPress={() => setPhase(chip.key)}
+                    style={[
+                      styles.chip,
+                      {
+                        backgroundColor: selected ? colors.accent : "transparent",
+                        borderColor: selected ? colors.accent : colors.borderStrong,
+                      },
+                    ]}
+                  >
+                    <T v="label" color={selected ? colors.onAccent : colors.text}>
+                      {chip.label}
+                    </T>
+                    <View
+                      style={[
+                        styles.chipCount,
+                        { backgroundColor: selected ? "rgba(255,255,255,0.2)" : colors.well },
+                      ]}
+                    >
+                      <T v="caption" color={selected ? colors.onAccent : colors.text2} style={{ fontFamily: fonts.sansSemi }}>
+                        {chip.count}
+                      </T>
+                    </View>
+                  </Tap>
+                );
+              })}
+            </ScrollView>
+          ) : null}
+        </Reveal>
 
-        contentContainerStyle={styles.listContent}
-
-        showsVerticalScrollIndicator={false}
-
-        refreshControl={
-
-          <RefreshControl
-
-            refreshing={refreshing}
-
-            onRefresh={() => fetchCampaigns(true)}
-
-            tintColor={COLORS.navy}
-
-            colors={[COLORS.navy]}
-
+        {visibleCampaigns.length === 0 ? (
+          <EmptyState
+            icon="file-tray-outline"
+            title="No campaigns found"
+            message={
+              search
+                ? "Nothing matches that search. Try a different word."
+                : "Campaigns show up here as soon as your account manager adds them."
+            }
           />
+        ) : activePhase !== "all" ? (
+          <Animated.View key={activePhase} entering={FadeIn.duration(240)} style={{ gap: space.lg }}>
+            {phaseList.map((campaign, index) => (
+              <Animated.View
+                key={getCampaignIdentity(campaign, index)}
+                entering={FadeInDown.delay(index * 50).duration(320)}
+              >
+                <CampaignCard campaign={campaign} onOpen={setSelectedCampaign} />
+              </Animated.View>
+            ))}
+          </Animated.View>
+        ) : (
+          <Animated.View key="all" entering={FadeIn.duration(240)} style={{ gap: space.lg }}>
+            {activeCampaigns.length === 0 ? (
+              <T tone="muted">No active campaigns right now.</T>
+            ) : (
+              activeCampaigns.map((campaign, index) => (
+                <Reveal key={getCampaignIdentity(campaign, index)} index={3 + index}>
+                  <CampaignCard campaign={campaign} onOpen={setSelectedCampaign} />
+                </Reveal>
+              ))
+            )}
 
-        }
+            {completedCampaigns.length > 0 ? (
+              <Disclosure
+                title="Completed"
+                note={plural(completedCampaigns.length)}
+                open={completedExpanded}
+                onToggle={() => setCompletedExpanded((previous) => !previous)}
+              />
+            ) : null}
 
-      />
+            {completedExpanded
+              ? completedCampaigns.map((campaign, index) => (
+                  <Animated.View
+                    key={getCampaignIdentity(campaign, index)}
+                    entering={FadeInDown.delay(index * 50).duration(320)}
+                  >
+                    <CampaignCard campaign={campaign} onOpen={setSelectedCampaign} />
+                  </Animated.View>
+                ))
+              : null}
+          </Animated.View>
+        )}
+      </ScreenScroll>
 
-    </View>
-
-  );
-
-}
-
-
-
-// --------------------------------------------------
-
-// METRIC COMPONENT
-
-// --------------------------------------------------
-
-
-
-function Metric({
-
-  icon,
-
-  value,
-
-  label,
-
-  valueColor,
-
-}: {
-
-  icon: React.ComponentProps<typeof Ionicons>["name"];
-
-  value: string;
-
-  label: string;
-
-  valueColor?: string;
-
-}) {
-
-  return (
-
-    <View style={styles.metricItem}>
-
-      <Ionicons
-
-        name={icon}
-
-        size={17}
-
-        color={COLORS.muted}
-
-      />
-
-
-
-      <Text
-
-        style={[
-
-          styles.metricValue,
-
-          valueColor ? { color: valueColor } : null,
-
-        ]}
-
-        numberOfLines={1}
-
-        adjustsFontSizeToFit
-
+      <Sheet
+        full
+        visible={!!selectedCampaign}
+        onClose={() => setSelectedCampaign(null)}
+        title="Campaign details"
       >
-
-        {value}
-
-      </Text>
-
-
-
-      <Text style={styles.metricLabel}>
-
-        {label}
-
-      </Text>
-
-    </View>
-
+        {selectedCampaign ? <CampaignDetails campaign={selectedCampaign} /> : null}
+      </Sheet>
+    </>
   );
-
 }
-
-
-
-// --------------------------------------------------
-
-// EMPTY SECTION
-
-// --------------------------------------------------
-
-
-
-function EmptySection({ message }: { message: string }) {
-
-  return (
-
-    <View style={styles.sectionEmpty}>
-
-      <Text style={styles.sectionEmptyText}>{message}</Text>
-
-    </View>
-
-  );
-
-}
-
-
-
-// --------------------------------------------------
-
-// STYLES
-
-// --------------------------------------------------
-
-
 
 const styles = StyleSheet.create({
-
-  screen: {
-
-    flex: 1,
-
-    backgroundColor: COLORS.background,
-
-  },
-
-
-
-  listContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 38,
-  },
-
-
-
-  centerState: {
-
-    flex: 1,
-
-    backgroundColor: COLORS.background,
-
-    alignItems: "center",
-
-    justifyContent: "center",
-
-    gap: 12,
-
-  },
-
-
-
-  stateText: {
-
-    color: COLORS.muted,
-
-    fontSize: 14,
-
-  },
-
-
-
-  // HEADER
-
-
-
-  pageHeader: {
-    gap: 17,
-    backgroundColor: COLORS.navy,
-    borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 21,
-    marginBottom: 5,
-    overflow: "hidden",
-  },
-
-
-
-  headingLeft: {
-
-    gap: 5,
-
-  },
-
-
-
-  eyebrow: {
-    fontSize: 10,
-    letterSpacing: 2,
-    fontWeight: "800",
-    color: "#D9C18E",
-  },
-
-
-
-  pageTitle: {
-    fontSize: 32,
-    fontWeight: "800",
-    color: "#FFFFFF",
-    letterSpacing: -1.1,
-  },
-
-
-
-  pageSubtitle: {
-    color: "#D5DCEB",
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 2,
-  },
-
-
-
-  countSummary: {
+  rowBetween: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderRadius: 15,
+    justifyContent: "space-between",
+    gap: space.md,
+  },
+  summary: { flexDirection: "row", borderRadius: radius.xl, overflow: "hidden", paddingVertical: 18 },
+  summaryCell: { flex: 1, alignItems: "center", paddingHorizontal: 8, gap: 2 },
+  search: {
+    height: 52,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    gap: 15,
-  },
-
-
-
-  countItem: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    gap: 5,
-
-  },
-
-
-
-  countNumber: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: "#FFFFFF",
-  },
-
-
-
-  countLabel: {
-    fontSize: 12,
-    color: "#D5DCEB",
-  },
-
-
-
-  countDivider: {
-    height: 19,
-    width: 1,
-    backgroundColor: "rgba(255,255,255,0.25)",
-  },
-
-
-
-  // FILTERS
-
-
-
-  filterArea: {
-    paddingTop: 13,
-    paddingBottom: 20,
-    gap: 12,
-  },
-
-
-
-  searchContainer: {
-    height: 48,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: "#E5E1D8",
-    backgroundColor: COLORS.surface,
+    paddingHorizontal: 18,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 15,
     gap: 10,
-    shadowColor: "#172F68",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.035,
-    shadowRadius: 6,
-    elevation: 1,
   },
-
-
-
   searchInput: {
-
     flex: 1,
-
-    color: COLORS.text,
-
-    fontSize: 14,
-
-    paddingVertical: 0,
-
-  },
-
-
-
-  filterAndViewRow: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    justifyContent: "space-between",
-
-  },
-
-
-
-  serviceFilters: {
-
-    flexDirection: "row",
-
-    backgroundColor: COLORS.surface,
-
-    borderRadius: 24,
-
-    padding: 3,
-
-    borderWidth: 1,
-
-    borderColor: COLORS.border,
-
-  },
-
-
-
-  filterButton: {
-
-    paddingHorizontal: 17,
-
-    paddingVertical: 8,
-
-    borderRadius: 20,
-
-  },
-
-
-
-  filterButtonActive: {
-
-    backgroundColor: "#E9EBEF",
-
-  },
-
-
-
-  filterText: {
-
-    color: COLORS.muted,
-
-    fontSize: 12,
-
-    fontWeight: "600",
-
-  },
-
-
-
-  filterTextActive: {
-
-    color: COLORS.navy,
-
-  },
-
-
-
-  viewToggle: {
-
-    flexDirection: "row",
-
-    backgroundColor: COLORS.surface,
-
-    borderRadius: 24,
-
-    padding: 3,
-
-    borderWidth: 1,
-
-    borderColor: COLORS.border,
-
-  },
-
-
-
-  viewButton: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    gap: 4,
-
-    paddingHorizontal: 11,
-
-    paddingVertical: 8,
-
-    borderRadius: 20,
-
-  },
-
-
-
-  viewButtonActive: {
-
-    backgroundColor: "#E9EBEF",
-
-  },
-
-
-
-  viewButtonText: {
-
-    fontSize: 11,
-
-    color: COLORS.muted,
-
-    fontWeight: "600",
-
-  },
-
-
-
-  viewButtonTextActive: {
-
-    color: COLORS.navy,
-
-  },
-
-
-
-  // SECTIONS
-
-
-
-  sectionHeading: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    gap: 11,
-
-    marginBottom: 15,
-
-    marginTop: 2,
-
-  },
-
-
-
-  sectionTitle: {
-    fontSize: 20,
-    color: "#1C1B19",
-    fontWeight: "800",
-    letterSpacing: -0.45,
-  },
-
-
-
-  sectionCount: {
-
-    backgroundColor: "#EEEFF3",
-
-    borderRadius: 20,
-
-    paddingHorizontal: 11,
-
-    paddingVertical: 6,
-
-  },
-
-
-
-  sectionCountText: {
-
-    fontSize: 11,
-
-    color: COLORS.navy,
-
-    fontWeight: "700",
-
-  },
-
-
-
-  // CAMPAIGN CARD
-
-
-
-  campaignCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#EAE6DE",
-    padding: 16,
-    marginBottom: 14,
-    shadowColor: "#1B2B4A",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.055,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-
-
-
-  compactCampaignCard: {
-
-    padding: 13,
-
-  },
-
-
-
-  cardTop: {
-
-    flexDirection: "row",
-
-    alignItems: "flex-start",
-
-    gap: 9,
-
-  },
-
-
-
-  cardTitleArea: {
-
-    flex: 1,
-
-    paddingTop: 2,
-
-  },
-
-
-
-  campaignTitle: {
-
-    fontSize: 15,
-
-    lineHeight: 21,
-
-    fontWeight: "700",
-
-    color: COLORS.text,
-
-  },
-
-
-
-  campaignService: {
-
-    fontSize: 12,
-
-    color: COLORS.muted,
-
-    marginTop: 4,
-
-  },
-
-
-
-  progressCircle: {
-
-    height: 47,
-
-    width: 47,
-
-    borderRadius: 24,
-
-    borderWidth: 3,
-
-    alignItems: "center",
-
-    justifyContent: "center",
-
-    backgroundColor: "#FFFFFF",
-
-  },
-
-
-
-  progressText: {
-
-    fontSize: 12,
-
-    fontWeight: "800",
-
-  },
-
-
-
-  statusRow: {
-
-    marginTop: 12,
-
-    marginBottom: 11,
-
-    flexDirection: "row",
-
-  },
-
-
-
-  statusPill: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    gap: 6,
-
-    borderRadius: 20,
-
-    paddingHorizontal: 10,
-
-    paddingVertical: 6,
-
-  },
-
-
-
-  statusDot: {
-
-    height: 6,
-
-    width: 6,
-
-    borderRadius: 4,
-
-  },
-
-
-
-  statusText: {
-
-    fontSize: 10,
-
-    fontWeight: "700",
-
-  },
-
-
-
-  metricsContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F7F6F2",
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 5,
-    borderWidth: 1,
-    borderColor: "#F0EDE6",
-  },
-
-
-
-  metricItem: {
-
-    flex: 1,
-
-    alignItems: "center",
-
-    justifyContent: "center",
-
-    gap: 4,
-
-    minWidth: 0,
-
-  },
-
-
-
-  metricValue: {
-
-    fontSize: 12,
-
-    fontWeight: "800",
-
-    color: COLORS.text,
-
-    maxWidth: "100%",
-
-  },
-
-
-
-  metricLabel: {
-
-    fontSize: 10,
-
-    color: COLORS.muted,
-
-  },
-
-
-
-  progressTrack: {
-
-    height: 5,
-
-    borderRadius: 5,
-
-    backgroundColor: "#E9E7E1",
-
-    marginTop: 14,
-
-    overflow: "hidden",
-
-  },
-
-
-
-  progressFill: {
-
     height: "100%",
-
-    borderRadius: 5,
-
+    fontFamily: fonts.sans,
+    fontSize: 14.5,
+    ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as object) : null),
   },
-
-
-
-  // COMPLETED SECTION
-
-
-
-  completedSection: {
+  chip: {
+    height: 40,
+    paddingLeft: 16,
+    paddingRight: 8,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: "#E7E2D8",
-    borderRadius: 19,
-    backgroundColor: "#F2F0EA",
-    padding: 15,
-    marginTop: 12,
-  },
-
-
-
-  completedHeader: {
-
     flexDirection: "row",
-
     alignItems: "center",
-
-    justifyContent: "space-between",
-
-    minHeight: 43,
-
+    gap: 8,
   },
-
-
-
-  completedHeaderLeft: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    gap: 10,
-
-    flex: 1,
-
-  },
-
-
-
-  completedTitle: {
-
-    fontSize: 18,
-
-    color: "#201F1B",
-
-    fontWeight: "700",
-
-  },
-
-
-
-  completedSubtitle: {
-
-    color: COLORS.muted,
-
-    fontSize: 11,
-
-    marginTop: 3,
-
-  },
-
-
-
-  expandLabel: {
-
-    color: COLORS.navy,
-
-    fontSize: 12,
-
-    fontWeight: "600",
-
-  },
-
-
-
-  completedContent: {
-
-    marginTop: 15,
-
-  },
-
-
-
-  // BOARD
-
-
-
-  boardContainer: {
-
-    marginTop: 3,
-
-  },
-
-
-
-  boardHint: {
-
-    color: COLORS.muted,
-
-    fontSize: 12,
-
-    marginBottom: 14,
-
-  },
-
-
-
-  boardScrollView: {
-    flexGrow: 0,
-    flexShrink: 0,
-  },
-
-  boardScrollContent: {
-    paddingRight: 15,
-    gap: 12,
-    alignItems: "flex-start",
-  },
-
-
-
-  boardColumn: {
-    width: 292,
-    alignSelf: "flex-start",
-    padding: 12,
-    borderRadius: 18,
-    backgroundColor: "#F0EEE8",
-    borderWidth: 1,
-    borderColor: "#E5E0D5",
-  },
-
-
-
-  boardColumnHeader: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    justifyContent: "space-between",
-
-    borderBottomWidth: 1,
-
-    borderBottomColor: "#DEDAD0",
-
-    paddingBottom: 12,
-
-    marginBottom: 12,
-
-  },
-
-
-
-  boardColumnTitleArea: {
-
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    gap: 7,
-
-    flex: 1,
-
-  },
-
-
-
-  boardStageDot: {
-
-    width: 7,
-
-    height: 7,
-
-    borderRadius: 5,
-
-  },
-
-
-
-  boardColumnTitle: {
-
-    fontSize: 12,
-
-    fontWeight: "800",
-
-  },
-
-
-
-  boardCount: {
-
-    height: 24,
-
+  chipCount: {
     minWidth: 24,
-
-    borderRadius: 15,
-
-    backgroundColor: "#FFFFFF",
-
-    alignItems: "center",
-
-    justifyContent: "center",
-
+    height: 24,
+    borderRadius: 12,
     paddingHorizontal: 6,
-
-  },
-
-
-
-  boardCountText: {
-
-    color: COLORS.text,
-
-    fontSize: 11,
-
-    fontWeight: "700",
-
-  },
-
-
-
-  boardCompletedNote: {
-
-    color: COLORS.muted,
-
-    fontSize: 11,
-
-    marginBottom: 10,
-
-  },
-
-
-
-  // CAMPAIGN DETAILS
-  detailContent: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 40, gap: 16 },
-  detailBackButton: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 8, paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: COLORS.border },
-  detailBackText: { color: COLORS.navy, fontSize: 13, fontWeight: "700" },
-  detailHero: { backgroundColor: COLORS.navy, borderRadius: 22, padding: 21, gap: 9 },
-  detailEyebrow: { color: "#D9C18E", fontSize: 10, fontWeight: "800", letterSpacing: 1.7 },
-  detailTitle: { color: "#FFFFFF", fontSize: 25, lineHeight: 31, fontWeight: "800" },
-  detailSubtitle: { color: "#D5DCEB", fontSize: 13 },
-  detailStatusPill: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 7, borderRadius: 20, paddingHorizontal: 11, paddingVertical: 7, marginTop: 5 },
-  detailSection: { backgroundColor: "#FFFFFF", borderRadius: 18, borderWidth: 1, borderColor: COLORS.border, padding: 17, gap: 13 },
-  detailSectionTitle: { color: COLORS.text, fontSize: 17, fontWeight: "800" },
-  detailGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  detailMetric: { width: "47%", backgroundColor: COLORS.background, borderRadius: 13, padding: 12, gap: 5 },
-  detailLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "600" },
-  detailValue: { color: COLORS.text, fontSize: 16, fontWeight: "800" },
-  detailInfoRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#F0EDE6" },
-  detailInfoValue: { color: COLORS.text, fontSize: 12, fontWeight: "700", textAlign: "right", flexShrink: 1 },
-  detailCreatorHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  detailCreatorCount: { color: COLORS.navy, fontWeight: "800", fontSize: 12, backgroundColor: "#E9EBEF", overflow: "hidden", borderRadius: 12, paddingHorizontal: 9, paddingVertical: 4 },
-  detailEmptyText: { color: COLORS.muted, fontSize: 13, paddingVertical: 8 },
-  detailCreatorRow: { flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: "#F0EDE6" },
-  detailCreatorAvatar: { width: 39, height: 39, borderRadius: 20, alignItems: "center", justifyContent: "center", backgroundColor: "#E9EDF7" },
-  detailCreatorInitial: { color: COLORS.navy, fontSize: 14, fontWeight: "800" },
-  detailCreatorInfo: { flex: 1, gap: 3 },
-  detailCreatorName: { color: COLORS.text, fontSize: 13, fontWeight: "700" },
-  detailCreatorMeta: { color: COLORS.muted, fontSize: 11 },
-
-  // EMPTY AND ERROR STATES
-
-
-
-  sectionEmpty: {
-
-    backgroundColor: COLORS.surface,
-
-    borderWidth: 1,
-
-    borderColor: COLORS.border,
-
-    borderRadius: 14,
-
-    padding: 22,
-
-    marginBottom: 12,
-
-  },
-
-
-
-  sectionEmptyText: {
-
-    color: COLORS.muted,
-
-    textAlign: "center",
-
-    fontSize: 13,
-
-  },
-
-
-
-  emptyContainer: {
-
     alignItems: "center",
-
     justifyContent: "center",
-
-    paddingVertical: 65,
-
-    gap: 12,
-
   },
-
-
-
-  emptyTitle: {
-
-    color: COLORS.text,
-
-    fontSize: 18,
-
-    fontWeight: "700",
-
-  },
-
-
-
-  emptyDescription: {
-
-    color: COLORS.muted,
-
-    fontSize: 13,
-
-    textAlign: "center",
-
-    maxWidth: 260,
-
-    lineHeight: 20,
-
-  },
-
-
-
-  errorContainer: {
-
-    backgroundColor: "#FFF4F2",
-
-    borderRadius: 15,
-
-    padding: 22,
-
+  progressRow: { flexDirection: "row", alignItems: "center", gap: space.md },
+  facts: { flexDirection: "row", gap: space.sm, borderRadius: radius.md, padding: space.md },
+  more: { flexDirection: "row", alignItems: "center", gap: 2 },
+  disclosure: {
+    flexDirection: "row",
     alignItems: "center",
-
-    gap: 12,
-
+    gap: space.md,
+    paddingVertical: space.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-
-
-
-  errorText: {
-
-    color: COLORS.red,
-
-    textAlign: "center",
-
-    fontSize: 13,
-
+  detailHero: { borderRadius: radius.xl, overflow: "hidden", padding: 22 },
+  phases: { flexDirection: "row", gap: 6, marginTop: 22 },
+  phase: { flex: 1, gap: 6 },
+  phaseBar: { height: 4, borderRadius: 2 },
+  figureGrid: { flexDirection: "row", flexWrap: "wrap", gap: space.md },
+  figureCell: {
+    flexGrow: 1,
+    flexBasis: "45%",
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: space.lg,
+    gap: 2,
   },
-
-
-
-  retryButton: {
-
-    backgroundColor: COLORS.navy,
-
-    paddingHorizontal: 20,
-
-    paddingVertical: 10,
-
+  infoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.lg,
+    padding: space.lg,
+  },
+  creatorRow: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.lg },
+  creatorAvatar: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-
+    alignItems: "center",
+    justifyContent: "center",
   },
-
-
-
-  retryText: {
-
-    color: "#FFFFFF",
-
-    fontWeight: "700",
-
-    fontSize: 12,
-
-  },
-
 });

@@ -1,62 +1,62 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-  TouchableOpacity,
-  Pressable,
-  RefreshControl,
-  useWindowDimensions,
-} from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Image, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import Animated, {
+  Easing,
+  FadeInDown,
+  FadeInRight,
+  FadeOutUp,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
-import Svg, { Circle } from "react-native-svg";
+import { LinearGradient } from "expo-linear-gradient";
+import { router, type Href } from "expo-router";
 
 import { useAuth } from "../../src/context/AuthContext";
+import { useAppTheme } from "../../src/context/ThemeContext";
 import {
   getPortalAnalytics,
   getPortalCampaigns,
+  getPortalReels,
   PortalAnalytics,
   PortalCampaign,
+  PortalReel,
 } from "../../src/lib/api";
-
-// --------------------------------------------------
-// THEME
-// --------------------------------------------------
-
-const COLORS = {
-  background: "#F7F6F2",
-  surface: "#FFFFFF",
-  navy: "#17243A",
-  navyLight: "#263A59",
-  muted: "#89909B",
-  text: "#303B4D",
-  border: "#ECEBE7",
-  lavender: "#A9A5D5",
-  lavenderLight: "#EFEEF9",
-  green: "#239B70",
-  greenLight: "#E8F5EF",
-  blue: "#6286C5",
-  blueLight: "#EAF0FA",
-  amber: "#D49A42",
-  amberLight: "#FBF2E5",
-  red: "#C75B5B",
-};
-
-const CARD_RADIUS = 20;
-
-// --------------------------------------------------
-// FORMAT HELPERS
-// --------------------------------------------------
+import { Seal } from "../../src/ui/brand";
+import { Donut, Ring, TrendLine } from "../../src/ui/charts";
+import {
+  Button,
+  Card,
+  CountUp,
+  EmptyState,
+  ErrorState,
+  Hairline,
+  AvatarStack,
+  InlineError,
+  Meter,
+  Pill,
+  PulseDot,
+  Reveal,
+  ScreenScroll,
+  ScreenSkeleton,
+  SectionTitle,
+  Segmented,
+  T,
+  Tap,
+  useTone,
+  type IconName,
+  type Tone,
+} from "../../src/ui/primitives";
+import { compactCount, rupees } from "../../src/ui/format";
+import { cardShadow, fonts, midnight, radius, space } from "../../src/ui/theme";
 
 function formatNumber(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-
-  return new Intl.NumberFormat("en-IN", {
-    notation: value >= 100000 ? "compact" : "standard",
-    maximumFractionDigits: 1,
-  }).format(value);
+  return compactCount(value);
 }
 
 function formatCurrency(value: number | null | undefined): string {
@@ -273,312 +273,154 @@ function savedVsIndustryOf(spend: number, views: number): number | null {
   return spend > 0 && views > 0 ? views * 0.3 - spend : null;
 }
 
-function CampaignProgressCard({
+// ---------------------------------------------------------------------------
+// Where things stand: three gauges, then the campaigns counted by phase
+// ---------------------------------------------------------------------------
+
+function Gauge({
+  value,
+  label,
+  ratio,
+  color,
+  delay,
+}: {
+  value: string;
+  label: string;
+  ratio: number;
+  color: string;
+  delay: number;
+}) {
+  const { colors } = useAppTheme();
+  return (
+    <View style={styles.gauge} accessible accessibilityLabel={`${label}: ${value}`}>
+      <View style={styles.gaugeRing}>
+        <Ring size={78} stroke={7} value={ratio} color={color} track={colors.well} delay={delay} />
+        <T
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          style={styles.gaugeValue}
+          color={value === "—" ? colors.muted : colors.text}
+        >
+          {value}
+        </T>
+      </View>
+      <T v="caption" tone="muted" style={{ textAlign: "center" }} numberOfLines={2}>
+        {label}
+      </T>
+    </View>
+  );
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  brief: "Brief",
+  shortlist: "Shortlist",
+  production: "Production",
+  live: "Live",
+  completed: "Done",
+};
+
+function CampaignSnapshot({
   progress,
   activeCampaigns,
   totalCampaigns,
   liveCreators,
   totalCreators,
+  campaigns,
 }: {
   progress: number | null;
   activeCampaigns: number;
   totalCampaigns: number;
   liveCreators: number;
   totalCreators: number;
+  campaigns: PortalCampaign[];
 }) {
-  const [selectedMetric, setSelectedMetric] = useState("progress");
-  const [hoveredMetric, setHoveredMetric] = useState<string | null>(null);
-  const { width: windowWidth } = useWindowDimensions();
+  const { colors } = useAppTheme();
 
-  const safeProgress =
-    progress == null ? 0 : Math.max(0, Math.min(100, progress));
-  const activeRatio = totalCampaigns > 0
-    ? Math.max(0, Math.min(100, (activeCampaigns / totalCampaigns) * 100))
-    : 0;
-  const creatorRatio = totalCreators > 0
-    ? Math.max(0, Math.min(100, (liveCreators / totalCreators) * 100))
-    : 0;
+  const safeProgress = progress == null ? 0 : Math.max(0, Math.min(100, progress));
+  const activeRatio =
+    totalCampaigns > 0 ? Math.max(0, Math.min(100, (activeCampaigns / totalCampaigns) * 100)) : 0;
+  const creatorRatio =
+    totalCreators > 0 ? Math.max(0, Math.min(100, (liveCreators / totalCreators) * 100)) : 0;
 
-  const metrics = [
-    {
-      id: "progress",
-      label: "Campaign progress",
-      value: progress == null ? "—" : `${Math.round(safeProgress)}%`,
-      color: "#3155B7",
-      tint: "#EAF0FF",
-      description: "Average completion across campaigns",
-      ratio: safeProgress,
-    },
-    {
-      id: "active",
-      label: "Active campaigns",
-      value: String(activeCampaigns),
-      color: "#16A085",
-      tint: "#E6F7F2",
-      description: `${Math.max(0, totalCampaigns - activeCampaigns)} completed`,
-      ratio: activeRatio,
-    },
-    {
-      id: "creators",
-      label: "Creators live",
-      value: `${liveCreators}/${totalCreators}`,
-      color: "#168F62",
-      tint: "#E7F5EE",
-      description: "Currently live on the roster",
-      ratio: creatorRatio,
-    },
-  ];
-
-  const selected = metrics.find((item) => item.id === selectedMetric) || metrics[0];
-  const ringSize = Math.min(190, Math.max(132, windowWidth * 0.43));
-  const ringSpecs = [
-    { metric: metrics[0], size: ringSize, stroke: 10 },
-    { metric: metrics[1], size: ringSize * 0.76, stroke: 10 },
-    { metric: metrics[2], size: ringSize * 0.52, stroke: 10 },
-  ];
+  const phaseColor: Record<string, string> = {
+    brief: colors.text2,
+    shortlist: colors.warning,
+    production: colors.accent,
+    live: colors.success,
+    completed: colors.gold,
+  };
+  const counts = PHASES.map((phase) => ({
+    phase,
+    count: campaigns.filter((campaign) => campaignPhase(campaign) === phase).length,
+  }));
 
   return (
-    <View style={styles.progressCard}>
-      <View style={styles.progressCardHeading}>
-        <Text style={styles.progressCardTitle}>Campaign snapshot</Text>
-        <Text style={styles.progressCardHint}>Select a ring to highlight</Text>
-      </View>
-
-      <View style={styles.progressOverviewRow}>
-        {/* Metric list on the LEFT */}
-        <View style={styles.progressMetricList}>
-          {metrics.map((item) => {
-            const active = selectedMetric === item.id;
-            const hovered = hoveredMetric === item.id;
-
-            return (
-              <Pressable
-                key={item.id}
-                accessibilityRole="button"
-                accessibilityLabel={`${item.label}: ${item.value}`}
-                accessibilityState={{ selected: active }}
-                onPress={() => setSelectedMetric(item.id)}
-                onHoverIn={() => setHoveredMetric(item.id)}
-                onHoverOut={() => setHoveredMetric(null)}
-                style={[
-                  styles.progressMetricRow,
-                  (active || hovered) && styles.progressMetricRowActive,
-                  (active || hovered) && { borderLeftColor: item.color },
-                ]}
-              >
-                <View style={[styles.progressMetricDot, { backgroundColor: item.color }]} />
-                <View style={styles.progressMetricCopy}>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.progressMetricLabel,
-                      (active || hovered) && { color: item.color },
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.progressMetricValue,
-                      (active || hovered) && { color: item.color },
-                    ]}
-                  >
-                    {item.value}
-                  </Text>
-                  <Text numberOfLines={1} style={styles.progressMetricDescription}>
-                    {item.description}
-                  </Text>
-                </View>
-                {(active || hovered) && (
-                  <Ionicons name="chevron-forward" size={14} color={item.color} />
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {/* Three concentric, individually clickable rings on the RIGHT */}
-        <View style={[styles.progressRingsStage, { width: ringSize, height: ringSize }]}>
-          {ringSpecs.map(({ metric, size, stroke }) => {
-            const active = selectedMetric === metric.id;
-            const hovered = hoveredMetric === metric.id;
-            const radius = (size - stroke) / 2;
-            const circumference = 2 * Math.PI * radius;
-            const dash = (metric.ratio / 100) * circumference;
-
-            return (
-              <Pressable
-                key={metric.id}
-                accessibilityRole="button"
-                accessibilityLabel={`Highlight ${metric.label}`}
-                accessibilityState={{ selected: active }}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  setSelectedMetric(metric.id);
-                }}
-                onHoverIn={() => setHoveredMetric(metric.id)}
-                onHoverOut={() => setHoveredMetric(null)}
-                style={[
-                  styles.progressRingTouch,
-                  {
-                    width: size,
-                    height: size,
-                    left: (ringSize - size) / 2,
-                    top: (ringSize - size) / 2,
-                    zIndex: metric.id === "creators" ? 3 : metric.id === "active" ? 2 : 1,
-                    transform: [{ scale: active || hovered ? 1.025 : 1 }],
-                  },
-                ]}
-              >
-                <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-                  <Circle
-                    cx={size / 2}
-                    cy={size / 2}
-                    r={radius}
-                    stroke={metric.tint}
-                    strokeWidth={stroke}
-                    fill="none"
-                  />
-                  <Circle
-                    cx={size / 2}
-                    cy={size / 2}
-                    r={radius}
-                    stroke={metric.color}
-                    strokeWidth={active || hovered ? stroke + 1.5 : stroke}
-                    strokeDasharray={`${dash} ${circumference}`}
-                    strokeLinecap="round"
-                    fill="none"
-                    transform={`rotate(-90 ${size / 2} ${size / 2})`}
-                  />
-                </Svg>
-                {(active || hovered) && (
-                  <View
-                    pointerEvents="none"
-                    style={[
-                      styles.progressRingGlow,
-                      { borderColor: metric.color },
-                    ]}
-                  />
-                )}
-              </Pressable>
-            );
-          })}
-          <View pointerEvents="none" style={styles.progressRingCenter}>
-            <Text style={[styles.progressRingCenterValue, { color: selected.color }]}>
-              {selected.value}
-            </Text>
-            <Text style={styles.progressRingCenterLabel} numberOfLines={1}>
-              {selected.id === "progress" ? "PROGRESS" : selected.id === "active" ? "ACTIVE" : "LIVE"}
-            </Text>
-          </View>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function PerformanceTile({
-  icon,
-  label,
-  value,
-  accent,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  value: string;
-  accent: string;
-}) {
-  return (
-    <View style={styles.performanceTile}>
-      <View style={styles.performanceTileTop}>
-        <Ionicons name={icon} size={18} color={accent} />
-        <Text style={styles.performanceTileValue} numberOfLines={1}>
-          {value}
-        </Text>
-      </View>
-      <Text style={styles.performanceTileLabel}>{label}</Text>
-    </View>
-  );
-}
-
-// --------------------------------------------------
-// SECTION HEADER
-// --------------------------------------------------
-
-function SectionHeading({
-  title,
-  subtitle,
-  right,
-}: {
-  title: string;
-  subtitle?: string;
-  right?: React.ReactNode;
-}) {
-  return (
-    <View style={styles.sectionHeading}>
-      <View style={styles.sectionHeadingText}>
-        <Text style={styles.sectionTitle}>{title}</Text>
-        {subtitle ? (
-          <Text style={styles.sectionSubtitle}>{subtitle}</Text>
-        ) : null}
-      </View>
-      {right}
-    </View>
-  );
-}
-
-// --------------------------------------------------
-// KPI CARD
-// --------------------------------------------------
-
-function MetricCard({
-  label,
-  value,
-  description,
-  icon,
-  color,
-  iconBackground,
-}: {
-  label: string;
-  value: string;
-  description: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  color: string;
-  iconBackground: string;
-}) {
-  return (
-    <View style={styles.metricCard}>
-      <View style={styles.metricTop}>
-        <View
-          style={[
-            styles.metricIcon,
-            { backgroundColor: iconBackground },
-          ]}
-        >
-          <Ionicons name={icon} size={18} color={color} />
-        </View>
-        <Ionicons
-          name="ellipsis-horizontal"
-          size={18}
-          color="#B6BAC1"
+    <Card style={{ gap: space.lg }}>
+      <View style={{ flexDirection: "row", gap: space.sm }}>
+        <Gauge
+          label="Average progress"
+          value={progress == null ? "—" : `${Math.round(safeProgress)}%`}
+          ratio={safeProgress}
+          color={colors.accent}
+          delay={200}
+        />
+        <Gauge
+          label="Active campaigns"
+          value={`${activeCampaigns}/${totalCampaigns}`}
+          ratio={activeRatio}
+          color={colors.gold}
+          delay={340}
+        />
+        <Gauge
+          label="Creators posted"
+          value={`${liveCreators}/${totalCreators}`}
+          ratio={creatorRatio}
+          color={colors.success}
+          delay={480}
         />
       </View>
 
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue} numberOfLines={1}>
-        {value}
-      </Text>
-      <Text style={styles.metricDescription}>{description}</Text>
-    </View>
+      <Hairline />
+
+      {/* Campaigns counted by the phase they are in, in order */}
+      <View>
+        <T v="label" tone="muted" style={{ marginBottom: space.md }}>
+          Campaigns by phase
+        </T>
+        <View style={{ flexDirection: "row", gap: 6 }}>
+          {counts.map(({ phase, count }) => (
+            <View key={phase} style={{ flex: 1, gap: 6 }}>
+              <T v="figureSm" color={count > 0 ? colors.text : colors.faint}>
+                {count}
+              </T>
+              <View
+                style={{
+                  height: 5,
+                  borderRadius: 3,
+                  backgroundColor: count > 0 ? phaseColor[phase] : colors.well,
+                }}
+              />
+              <T
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                color={count > 0 ? colors.text2 : colors.faint}
+                style={{ fontFamily: fonts.sansMedium, fontSize: 9.5, lineHeight: 14, letterSpacing: -0.2 }}
+              >
+                {PHASE_LABELS[phase]}
+              </T>
+            </View>
+          ))}
+        </View>
+      </View>
+    </Card>
   );
 }
 
-// --------------------------------------------------
-// AUDIENCE PERFORMANCE CHART
-// Uses the analytics endpoint's recorded impressions and engagements.
-// The chart is drawn with React Native Views; no chart/Reanimated package.
-// --------------------------------------------------
+function thin<P>(points: P[], max: number): P[] {
+  if (points.length <= max) return points;
+  const step = (points.length - 1) / (max - 1);
+  return Array.from({ length: max }, (_, index) => points[Math.round(index * step)]);
+}
 
 function formatPerformanceNumber(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -715,193 +557,89 @@ function AudiencePerformanceChart({
     ? total - firstValue
     : null;
 
-  const chartValues = points.slice(-8);
-  const maxValue = Math.max(1, ...chartValues.map((point) => point.value));
-  const chartPoints = chartValues.map((point, index, list) => ({
-    ...point,
-    x: list.length <= 1
-      ? plotWidth / 2
-      : (index / (list.length - 1)) * (plotWidth - 12) + 6,
-    y: plotHeight - 10 - (point.value / maxValue) * (plotHeight - 24),
-  }));
+  const { colors } = useAppTheme();
+  const tone = growth != null && growth < 0 ? colors.danger : colors.success;
 
   return (
-    <View style={styles.performanceChartCard}>
-      <View style={styles.performanceChartHeader}>
-        <Text style={styles.performanceChartTitle}>Audience performance</Text>
-        <View style={styles.chartPeriodDropdown}>
-          <Text style={styles.chartPeriodDropdownText}>
-            {period === "ALL" ? "All time" : `Last ${period === "7D" ? "7 days" : "30 days"}`}
-          </Text>
-        </View>
+    <Card>
+      <View style={styles.rowBetween}>
+        <T v="heading">Audience growth</T>
+        <T v="caption" tone="faint">
+          {period === "ALL" ? "All time" : period === "7D" ? "Last 7 days" : "Last 30 days"}
+        </T>
       </View>
 
-      <View style={styles.performanceTabs}>
-        <TouchableOpacity
-          onPress={() => setMetric("views")}
-          style={[styles.performanceTab, metric === "views" && styles.performanceTabActive]}
-          activeOpacity={0.8}
-        >
-          <Text style={[styles.performanceTabText, metric === "views" && styles.performanceTabTextActive]}>Views</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => setMetric("engagements")}
-          style={[styles.performanceTab, metric === "engagements" && styles.performanceTabActive]}
-          activeOpacity={0.8}
-        >
-          <Text style={[styles.performanceTabText, metric === "engagements" && styles.performanceTabTextActive]}>Engagements</Text>
-        </TouchableOpacity>
-      </View>
+      <Segmented
+        style={{ marginTop: space.md }}
+        value={metric}
+        onChange={setMetric}
+        options={[
+          { value: "views", label: "Views" },
+          { value: "engagements", label: "Engagements" },
+        ]}
+      />
 
-      <View style={styles.performanceValueRow}>
-        <Text style={styles.performanceChartValue}>
-          {formatPerformanceNumber(total)}
-        </Text>
+      <View style={[styles.rowBetween, { marginTop: space.lg, alignItems: "flex-end" }]}>
+        <CountUp
+          v="figure"
+          value={total}
+          format={(value) => formatNumber(Math.round(value))}
+        />
         {growth != null && growth !== 0 ? (
-          <View style={styles.growthPill}>
-            <Ionicons
-              name={growth >= 0 ? "trending-up" : "trending-down"}
-              size={12}
-              color={growth >= 0 ? COLORS.green : COLORS.red}
-            />
-            <Text style={[styles.growthText, { color: growth >= 0 ? COLORS.green : COLORS.red }]}>
-              {growth >= 0 ? "+" : "−"}{formatPerformanceNumber(Math.abs(growth))} in period
-            </Text>
+          <View style={[styles.growth, { backgroundColor: growth < 0 ? colors.dangerMuted : colors.successMuted }]}>
+            <Ionicons name={growth >= 0 ? "trending-up" : "trending-down"} size={13} color={tone} />
+            <T v="caption" color={tone} style={{ fontFamily: fonts.sansMedium }}>
+              {growth >= 0 ? "+" : "−"}
+              {formatNumber(Math.abs(growth))} in period
+            </T>
           </View>
         ) : null}
       </View>
 
-      {chartPoints.length > 1 ? (
-        <View style={[styles.performancePlot, { width: plotWidth, height: plotHeight }]}>
-          {[0, 1, 2].map((line) => (
-            <View key={line} style={[styles.performanceGridLine, { top: 12 + line * 48, width: plotWidth }]} />
-          ))}
-          {chartPoints.slice(1).map((point, index) => {
-            const previous = chartPoints[index];
-            const dx = point.x - previous.x;
-            const dy = point.y - previous.y;
-            const length = Math.sqrt(dx * dx + dy * dy);
-            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-            return (
-              <View
-                key={`segment-${index}`}
-                style={[styles.performanceLineSegment, {
-                  left: (previous.x + point.x - length) / 2,
-                  top: (previous.y + point.y) / 2 - 1.25,
-                  width: length,
-                  transform: [{ rotate: `${angle}deg` }],
-                }]}
-              />
-            );
-          })}
-          {chartPoints.map((point, index) => (
-            <View key={`point-${index}`} style={[styles.performancePoint, { left: point.x - 4, top: point.y - 4 }]} />
-          ))}
-        </View>
-      ) : (
-        <View style={[styles.performancePlotEmpty, { height: plotHeight }]}>
-          <Text style={styles.chartEmptyText}>
-            {growthSeries.length === 0
-              ? "Growth data appears after at least two recorded reading days."
-              : "No readings are available in this selected period."}
-          </Text>
-        </View>
-      )}
-
-      <View style={styles.performanceAxis}>
-        <Text style={styles.axisText}>{formatDate(chartPoints[0]?.date)}</Text>
-        <Text style={styles.axisText}>{formatDate(chartPoints[chartPoints.length - 1]?.date)}</Text>
-      </View>
-      <View style={styles.performancePeriodRow}>
-        {(["7D", "30D", "ALL"] as const).map((item) => (
-          <TouchableOpacity key={item} onPress={() => setPeriod(item)} style={[styles.performancePeriodButton, period === item && styles.performancePeriodButtonActive]}>
-            <Text style={[styles.performancePeriodText, period === item && styles.performancePeriodTextActive]}>{item}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-// --------------------------------------------------
-// CUSTOM REACH CHART
-// Uses actual event reach values.
-// --------------------------------------------------
-
-function ReachChart({
-  events,
-}: {
-  events: NonNullable<PortalAnalytics["events"]>;
-}) {
-  const [period, setPeriod] = useState<"7D" | "30D" | "ALL">("7D");
-
-  const chartEvents = useMemo(() => {
-    const sorted = [...events].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
-    if (period === "ALL") return sorted;
-    return sorted.slice(-(period === "7D" ? 7 : 30));
-  }, [events, period]);
-
-  const maxValue = Math.max(1, ...chartEvents.map((event) => Number(event.reach) || 0));
-  const totalReach = chartEvents.reduce((sum, event) => sum + (Number(event.reach) || 0), 0);
-  const barEvents = chartEvents.slice(-7);
-
-  return (
-    <View style={styles.chartCard}>
-      <View style={styles.chartTopRow}>
-        <View>
-          <Text style={styles.chartEyebrow}>AUDIENCE REACH</Text>
-          <Text style={styles.chartMainValue}>{formatNumber(totalReach)}</Text>
-          <Text style={styles.chartDescription}>Recorded reach in selected period</Text>
-        </View>
-        <View style={styles.chartLegend}>
-          <View style={styles.legendDot} />
-          <Text style={styles.legendText}>Reach</Text>
-        </View>
-      </View>
-
-      <View style={styles.periodSelector}>
-        {(["7D", "30D", "ALL"] as const).map((item) => (
-          <TouchableOpacity key={item} onPress={() => setPeriod(item)} style={[styles.periodButton, period === item && styles.periodButtonActive]} activeOpacity={0.8}>
-            <Text style={[styles.periodText, period === item && styles.periodTextActive]}>{item}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {barEvents.length > 0 ? (
+      {points.length > 1 ? (
         <>
-          <View style={styles.barChart}>
-            {barEvents.map((event, index) => {
-              const value = Number(event.reach) || 0;
-              const height = Math.max(5, (value / maxValue) * 112);
-              return (
-                <View key={`${event.date}-${index}`} style={styles.barColumn}>
-                  <View style={styles.barTrack}>
-                    <View style={[styles.reachBar, { height }, index === barEvents.length - 1 && styles.reachBarActive]} />
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-          <View style={styles.chartAxis}>
-            <Text style={styles.axisText}>{formatDate(barEvents[0]?.date)}</Text>
-            <Text style={styles.axisText}>{formatDate(barEvents[barEvents.length - 1]?.date)}</Text>
+          <TrendLine
+            data={thin(points, 48).map((point) => ({ label: point.date, value: point.value }))}
+            formatValue={formatNumber}
+            formatLabel={formatDate}
+          />
+          <View style={[styles.rowBetween, { marginTop: 6 }]}>
+            <T v="caption" tone="faint">
+              {formatDate(points[0]?.date)}
+            </T>
+            <T v="caption" tone="faint">
+              {formatDate(points[points.length - 1]?.date)}
+            </T>
           </View>
         </>
       ) : (
         <View style={styles.chartEmpty}>
-          <Ionicons name="analytics-outline" size={28} color="#B3B7C0" />
-          <Text style={styles.chartEmptyText}>Reach data will appear here when available.</Text>
+          <Ionicons name="pulse-outline" size={22} color={colors.faint} />
+          <T v="caption" tone="faint" style={{ textAlign: "center", maxWidth: 260 }}>
+            {growthSeries.length === 0
+              ? "The growth line appears once readings exist for two or more days."
+              : "No readings fall inside this period."}
+          </T>
         </View>
       )}
-    </View>
+
+      <Segmented
+        style={{ marginTop: space.md }}
+        value={period}
+        onChange={setPeriod}
+        options={[
+          { value: "7D", label: "7 days" },
+          { value: "30D", label: "30 days" },
+          { value: "ALL", label: "All time" },
+        ]}
+      />
+    </Card>
   );
 }
 
-// --------------------------------------------------
-// SPEND BY SERVICE
-// --------------------------------------------------
+// ---------------------------------------------------------------------------
+// Spend by service
+// ---------------------------------------------------------------------------
 
 function SpendByService({
   spend,
@@ -917,216 +655,819 @@ function SpendByService({
     .sort((a, b) => b.value - a.value);
 
   const total = entries.reduce((sum, item) => sum + item.value, 0);
-  const colors = ["#5146C8", "#8175E8", "#A69DF1", "#C8C2F7", "#17243A", "#6D83C8"];
-  const radius = 39;
-  const strokeWidth = 10;
-  const circumference = 2 * Math.PI * radius;
-  const segmentGap = entries.length > 1 ? 3 : 0;
-  let accumulatedFraction = 0;
+  const { colors } = useAppTheme();
+
+  if (total <= 0) {
+    return (
+      <Card>
+        <EmptyState
+          icon="pie-chart-outline"
+          title="No spend recorded yet"
+          message="The split across services shows up here once spend is logged."
+        />
+      </Card>
+    );
+  }
 
   return (
-    <View style={styles.serviceCard}>
-      <View style={styles.spendHeader}>
-        <View style={styles.spendHeaderText}>
-          <Text style={styles.spendTitle}>Spend split</Text>
-          <Text style={styles.spendSubtitle}>Recorded spend across services</Text>
+    <Card style={{ gap: space.lg }}>
+      <View style={[styles.rowBetween, { alignItems: "flex-end" }]}>
+        <View>
+          <T v="caption" tone="faint">
+            Total recorded
+          </T>
+          <CountUp
+            v="figure"
+            value={total}
+            format={(value) => formatCurrency(Math.round(value))}
+          />
         </View>
-        <View style={styles.spendHeaderIcon}>
-          <Ionicons name="wallet-outline" size={19} color="#5146C8" />
-        </View>
+        <T v="caption" tone="faint" style={{ marginBottom: 8 }}>
+          {entries.length} service{entries.length === 1 ? "" : "s"}
+        </T>
       </View>
 
-      {total > 0 ? (
-        <View style={styles.spendChartContent}>
-          <View style={styles.spendDonutWrap}>
-            <Svg width={124} height={124} viewBox="0 0 100 100">
-              <Circle
-                cx="50"
-                cy="50"
-                r={radius}
-                stroke="#F0EEF8"
-                strokeWidth={strokeWidth}
-                fill="none"
-              />
-              {entries.map((item, index) => {
-                const fraction = item.value / total;
-                const visibleLength = Math.max(
-                  0,
-                  fraction * circumference - segmentGap
-                );
-                const dashOffset = -accumulatedFraction * circumference;
-                accumulatedFraction += fraction;
+      <View style={styles.stack}>
+        {entries.map((item, index) => (
+          <View
+            key={item.name}
+            style={{ flex: item.value, backgroundColor: colors.viz[index % colors.viz.length] }}
+          />
+        ))}
+      </View>
 
-                return (
-                  <Circle
-  key={item.name}
-  cx="50"
-  cy="50"
-  r={radius}
-  stroke={colors[index % colors.length]}
-  strokeWidth={strokeWidth}
-  strokeDasharray={`${visibleLength} ${circumference}`}
-  strokeDashoffset={dashOffset}
-  strokeLinecap="butt"
-  fill="none"
-  transform="rotate(-90 50 50)"
-/>
-                );
-              })}
-            </Svg>
-            <View style={styles.spendDonutCenter}>
-              <Text style={styles.spendDonutCaption}>TOTAL</Text>
-              <Text style={styles.spendDonutValue} numberOfLines={1} adjustsFontSizeToFit>
-                {formatCurrency(total)}
+      <View>
+        {entries.map((item, index) => {
+          const percentage = (item.value / total) * 100;
+          return (
+            <View key={item.name}>
+              {index > 0 ? <Hairline /> : null}
+              <View style={styles.spendLine}>
+                <View
+                  style={[styles.legendDot, { backgroundColor: colors.viz[index % colors.viz.length] }]}
+                />
+                <T v="bodyStrong" style={{ flex: 1 }} numberOfLines={1}>
+                  {item.name}
+                </T>
+                <T v="bodyStrong">{formatCurrency(item.value)}</T>
+                <View style={[styles.percent, { backgroundColor: colors.well }]}>
+                  <T v="caption" tone="muted" style={{ fontFamily: fonts.sansMedium }}>
+                    {percentage.toFixed(percentage % 1 === 0 ? 0 : 1)}%
+                  </T>
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Hero pieces: a soft pastel panel, a headline with gradient words, three
+// framed posts, then a dark card and a light card.
+// ---------------------------------------------------------------------------
+
+const HERO = {
+  light: {
+    ground: ["#F3EBDD", "#ECEAF4", "#DDE2F6"] as const,
+    ink: "#191611",
+    sub: "rgba(25,22,17,0.62)",
+    chip: "rgba(255,255,255,0.74)",
+    words: ["#1B2A5C", "#B8862B"] as const,
+    card: "#FFFFFF",
+  },
+  dark: {
+    ground: ["#1B2347", "#141A3C", "#231F2E"] as const,
+    ink: "#F6F4EE",
+    sub: "rgba(246,244,238,0.66)",
+    chip: "rgba(255,255,255,0.09)",
+    words: ["#9DB7FF", "#F4C26B"] as const,
+    card: "#1B1A21",
+  },
+};
+
+// Navy, with one gold frame in the middle.
+const FRAME_FILLS: (readonly [string, string])[] = [
+  ["#1B2A5C", "#5E78D0"],
+  ["#0A0F3A", "#D9A441"],
+  ["#2C3E7E", "#8FA5E8"],
+];
+
+function mix(from: string, to: string, t: number): string {
+  const a = parseInt(from.slice(1), 16);
+  const b = parseInt(to.slice(1), 16);
+  const channel = (shift: number) => {
+    const x = (a >> shift) & 255;
+    const y = (b >> shift) & 255;
+    return Math.round(x + (y - x) * t);
+  };
+  return `rgb(${channel(16)},${channel(8)},${channel(0)})`;
+}
+
+/** Text whose colour runs from one hue to another, letter by letter. */
+function GradientWords({ text, from, to }: { text: string; from: string; to: string }) {
+  const letters = Array.from(text);
+  return (
+    <>
+      {letters.map((letter, index) => (
+        <Text
+          key={index}
+          style={{ color: mix(from, to, letters.length < 2 ? 0 : index / (letters.length - 1)) }}
+        >
+          {letter}
+        </Text>
+      ))}
+    </>
+  );
+}
+
+function reelImage(reel: PortalReel): string {
+  const pick = (value: unknown) => (typeof value === "string" ? value : "");
+  return (
+    pick(reel.thumbnail) ||
+    pick(reel.poster) ||
+    pick(reel.image) ||
+    pick(reel.display_url) ||
+    pick(reel.thumbnail_url)
+  );
+}
+
+function Frame({
+  reel,
+  icon,
+  width,
+  height,
+  round,
+  fill,
+  order,
+}: {
+  reel?: PortalReel;
+  icon: IconName;
+  width: number;
+  height: number;
+  round: number;
+  fill: readonly [string, string];
+  order: number;
+}) {
+  const reduced = useReducedMotion();
+  const image = reel ? reelImage(reel) : "";
+
+  // A slow float, each frame slightly out of step with the next.
+  const float = useSharedValue(0);
+  useEffect(() => {
+    if (reduced) return;
+    float.value = withDelay(
+      order * 500,
+      withRepeat(
+        withSequence(
+          withTiming(1, { duration: 2200, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0, { duration: 2200, easing: Easing.inOut(Easing.sin) })
+        ),
+        -1,
+        false
+      )
+    );
+  }, [order, reduced, float]);
+  const floatStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -float.value * 5 }] }));
+
+  return (
+    <Animated.View
+      entering={FadeInDown.delay(250 + order * 110).duration(600).easing(Easing.out(Easing.cubic))}
+    >
+      <Animated.View style={floatStyle}>
+        <Tap
+          accessibilityRole="button"
+          accessibilityLabel={
+            reel
+              ? `Post by ${reel.username || "a creator"}, ${formatNumber(numeric(reel.views))} views. Open assets.`
+              : "Open assets"
+          }
+          onPress={() => router.navigate("/(tabs)/assets")}
+          scaleTo={0.95}
+          style={{ width, height, borderRadius: round, overflow: "hidden" }}
+        >
+          <LinearGradient
+            colors={[fill[0], fill[1]]}
+            start={{ x: 0.2, y: 0 }}
+            end={{ x: 0.8, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          {image ? (
+            <Image source={{ uri: image }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          ) : (
+            <View style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center" }]}>
+              <Ionicons name={icon} size={width * 0.32} color="rgba(255,255,255,0.92)" />
+            </View>
+          )}
+          {reel && numeric(reel.views) != null ? (
+            <View style={styles.frameChip}>
+              <Ionicons name="eye" size={10} color="#16131F" />
+              <Text style={styles.frameChipText}>{formatNumber(numeric(reel.views))}</Text>
+            </View>
+          ) : null}
+        </Tap>
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+function HeroChip({ label, value, ink, sub, bg }: { label: string; value: string; ink: string; sub: string; bg: string }) {
+  return (
+    <View style={[styles.heroChip, { backgroundColor: bg }]}>
+      <Text style={[styles.heroChipValue, { color: ink }]} numberOfLines={1} adjustsFontSizeToFit>
+        {value}
+      </Text>
+      <Text style={[styles.heroChipLabel, { color: sub }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+/** One line about the account that changes every few seconds. */
+function Ticker({ lines, color }: { lines: string[]; color: string }) {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    if (lines.length < 2) return;
+    const id = setInterval(() => setIndex((value) => value + 1), 3800);
+    return () => clearInterval(id);
+  }, [lines.length]);
+
+  if (lines.length === 0) return null;
+  const line = lines[index % lines.length];
+
+  return (
+    <View style={styles.tickerWindow} accessibilityLiveRegion="polite">
+      <Animated.Text
+        key={line}
+        entering={FadeInDown.duration(420).easing(Easing.out(Easing.cubic))}
+        exiting={FadeOutUp.duration(260)}
+        numberOfLines={1}
+        style={[styles.tickerText, { color }]}
+      >
+        {line}
+      </Animated.Text>
+    </View>
+  );
+}
+
+// The savings estimate is the web portal's: tracked views at the ₹0.30
+// industry cost per view, less the campaign budgets.
+const INDUSTRY_RATE = 0.3;
+
+function SavingsCard({ spend, views }: { spend: number; views: number }) {
+  const saved = savedVsIndustryOf(spend, views);
+  const cpv = cpvOf(spend, views);
+  const industryCost = views * INDUSTRY_RATE;
+  const percent = saved != null && industryCost > 0 ? Math.round((saved / industryCost) * 100) : 0;
+
+  const state = saved == null || cpv == null ? "none" : saved > 0 ? "saved" : "over";
+
+  return (
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel="Savings. Open billing."
+      onPress={() => router.navigate("/(tabs)/billing")}
+      scaleTo={0.98}
+      style={styles.darkCard}
+    >
+      <LinearGradient
+        colors={[midnight.top, midnight.mid, "#18266A"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[styles.cardDot, { backgroundColor: midnight.lamp }]} />
+
+      {state === "saved" ? (
+        <>
+          <Text style={styles.darkLabel}>You saved</Text>
+          <CountUp
+            value={saved}
+            duration={1600}
+            format={rupees}
+            color={midnight.lamp}
+            style={styles.darkFigure}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+          />
+          <Text style={styles.darkBody}>
+            {formatNumber(views)} views would cost {rupees(industryCost)} at the ₹0.30 industry
+            rate. You paid {rupees(spend)}.
+          </Text>
+        </>
+      ) : state === "over" ? (
+        <>
+          <Text style={styles.darkLabel}>Cost per view so far</Text>
+          <Text style={styles.darkFigure}>₹{(cpv as number).toFixed(2)}</Text>
+          <Text style={styles.darkBody}>
+            The industry rate is ₹0.30. Savings show here once your cost per view drops below it.
+          </Text>
+        </>
+      ) : (
+        <>
+          <Text style={styles.darkLabel}>Your savings</Text>
+          <Text style={[styles.darkFigure, { fontSize: 24, lineHeight: 30 }]}>Coming soon</Text>
+          <Text style={styles.darkBody}>
+            Once your posts have tracked views, this shows what you saved against the ₹0.30
+            industry cost per view.
+          </Text>
+        </>
+      )}
+
+      <View style={styles.darkFoot}>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <LinearGradient
+            colors={["#FBDA8E", "#E9A441"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.square}
+          >
+            <Ionicons name="trending-down" size={18} color="#0A0F3A" />
+          </LinearGradient>
+          {state === "saved" ? (
+            <View style={styles.percentChip}>
+              <Text style={styles.squareText} numberOfLines={1}>
+                {percent}% less
               </Text>
             </View>
-          </View>
-
-          <View style={styles.spendLegend}>
-            {entries.map((item, index) => {
-              const percentage = (item.value / total) * 100;
-              return (
-                <View key={item.name} style={styles.spendLegendRow}>
-                  <View style={styles.spendLegendLabelGroup}>
-                    <View
-                      style={[
-                        styles.spendLegendDot,
-                        { backgroundColor: colors[index % colors.length] },
-                      ]}
-                    />
-                    <Text style={styles.spendLegendName} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                  </View>
-                  <Text style={styles.spendLegendPercent}>
-                    {percentage.toFixed(percentage % 1 === 0 ? 0 : 1)}%
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
+          ) : null}
         </View>
-      ) : (
-        <View style={styles.serviceEmpty}>
-          <View style={styles.spendEmptyIcon}>
-            <Ionicons name="pie-chart-outline" size={23} color="#8D85D9" />
-          </View>
-          <Text style={styles.spendEmptyTitle}>No spend recorded yet</Text>
-          <Text style={styles.chartEmptyText}>
-            Service spending details will appear here when available.
-          </Text>
+        <View style={styles.whiteButton}>
+          <Ionicons name="receipt-outline" size={14} color="#0A0F3A" />
+          <Text style={styles.whiteButtonText}>See billing</Text>
         </View>
-      )}
-    </View>
+      </View>
+    </Tap>
   );
 }
 
-// --------------------------------------------------
-// CAMPAIGN CARD
-// --------------------------------------------------
-
-function RecentCampaignCard({
-  campaign,
-}: {
-  campaign: PortalCampaign;
-}) {
-  const live = isCampaignLive(campaign);
-
-  return (
-    <View style={styles.campaignCard}>
-      <View style={styles.campaignTopRow}>
-        <View style={styles.campaignTitleContainer}>
-          <Text style={styles.campaignName} numberOfLines={2}>
-            {campaign.name || "Untitled campaign"}
-          </Text>
-
-          <Text style={styles.campaignService}>
-            {[campaign.service, campaign.region]
-              .filter(Boolean)
-              .join(" · ") || "Campaign"}
-          </Text>
-        </View>
-
-        <View
-          style={[
-            styles.statusBadge,
-            live ? styles.liveBadge : styles.defaultBadge,
-          ]}
-        >
-          <View
-            style={[
-              styles.statusDot,
-              live ? styles.liveDot : styles.defaultDot,
-            ]}
-          />
-          <Text
-            style={[
-              styles.statusText,
-              live ? styles.liveText : styles.defaultText,
-            ]}
-          >
-            {getCampaignStatus(campaign)}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.campaignDivider} />
-
-      <View style={styles.campaignDetailsRow}>
-        <View style={styles.campaignDetail}>
-          <Text style={styles.campaignDetailLabel}>BUDGET</Text>
-          <Text style={styles.campaignDetailValue}>
-            {numeric(campaign.budget) == null
-              ? "—"
-              : formatCurrency(numeric(campaign.budget))}
-          </Text>
-        </View>
-
-        <View style={styles.campaignDetail}>
-          <Text style={styles.campaignDetailLabel}>CREATORS</Text>
-          <Text style={styles.campaignDetailValue}>
-            {campaign.creators == null ? "—" : campaign.creators.length}
-          </Text>
-        </View>
-
-        <View style={styles.campaignDetail}>
-          <Text style={styles.campaignDetailLabel}>START DATE</Text>
-          <Text style={styles.campaignDetailValue}>
-            {formatDate(campaign.start)}
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-// --------------------------------------------------
-// EMPTY STATE
-// --------------------------------------------------
-
-function EmptyState({
+function MotionCard({
   title,
-  description,
-  icon = "folder-open-outline",
+  lines,
+  names,
+  progress,
 }: {
   title: string;
-  description: string;
-  icon?: keyof typeof Ionicons.glyphMap;
+  lines: string[];
+  names: string[];
+  progress: number | null;
 }) {
+  const { colors, isDark } = useAppTheme();
   return (
-    <View style={styles.emptyCard}>
-      <View style={styles.emptyIcon}>
-        <Ionicons name={icon} size={24} color={COLORS.navy} />
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel={`${title}. Open campaigns.`}
+      onPress={() => router.navigate("/(tabs)/campaigns")}
+      scaleTo={0.98}
+      style={[
+        styles.lightCard,
+        cardShadow(colors),
+        { backgroundColor: colors.surface, borderColor: colors.border },
+      ]}
+    >
+      {/* A faint wash of the brand colours in the corner */}
+      <LinearGradient
+        pointerEvents="none"
+        colors={
+          isDark
+            ? ["rgba(94,143,224,0.20)", "rgba(94,143,224,0)"]
+            : ["rgba(184,134,43,0.16)", "rgba(27,42,92,0)"]
+        }
+        start={{ x: 1, y: 0 }}
+        end={{ x: 0.35, y: 0.8 }}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <View style={styles.rowBetween}>
+        <View style={{ flex: 1 }}>
+          <T v="heading" style={{ fontSize: 25, lineHeight: 31 }} numberOfLines={2}>
+            {title}
+          </T>
+        </View>
+        <View style={[styles.go, { backgroundColor: colors.accent }]}>
+          <Ionicons name="arrow-forward" size={17} color={colors.onAccent} />
+        </View>
       </View>
-      <Text style={styles.emptyTitle}>{title}</Text>
-      <Text style={styles.emptyMessage}>{description}</Text>
+
+      {lines.length > 0 ? (
+        <View style={[styles.news, { backgroundColor: colors.well }]}>
+          <PulseDot color={colors.success} />
+          <View style={{ flex: 1 }}>
+            <Ticker lines={lines} color={colors.text} />
+          </View>
+        </View>
+      ) : null}
+
+      {progress != null ? (
+        <View style={{ gap: 6, marginTop: space.lg }}>
+          <View style={styles.rowBetween}>
+            <T v="caption" tone="faint">
+              Average progress
+            </T>
+            <T v="caption" tone="accent" style={{ fontFamily: fonts.sansSemi }}>
+              {progress}%
+            </T>
+          </View>
+          <Meter value={progress} height={6} />
+        </View>
+      ) : null}
+
+      {names.length > 0 ? (
+        <View style={[styles.rowBetween, { marginTop: space.lg }]}>
+          <AvatarStack names={names} max={5} size={34} ring={colors.surface} />
+          <T v="caption" tone="muted">
+            {names.length} creator{names.length === 1 ? "" : "s"} on your campaigns
+          </T>
+        </View>
+      ) : null}
+    </Tap>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Highlights: the best-performing posts, playing through like a reel
+// ---------------------------------------------------------------------------
+
+const HIGHLIGHT_SECONDS = 4.5;
+
+function HighlightCard({
+  reel,
+  rank,
+  width,
+  playing,
+}: {
+  reel: PortalReel;
+  rank: number;
+  width: number;
+  playing: boolean;
+}) {
+  const { colors } = useAppTheme();
+  const reduced = useReducedMotion();
+  const image = reelImage(reel);
+
+  // A slow push-in on the card that is playing, so a still image feels alive.
+  const zoom = useSharedValue(1);
+  useEffect(() => {
+    zoom.value =
+      playing && !reduced
+        ? withTiming(1.14, { duration: HIGHLIGHT_SECONDS * 1000, easing: Easing.linear })
+        : withTiming(1, { duration: 500 });
+  }, [playing, reduced, zoom]);
+  const zoomStyle = useAnimatedStyle(() => ({ transform: [{ scale: zoom.value }] }));
+
+  const focus = useSharedValue(playing ? 1 : 0);
+  useEffect(() => {
+    focus.value = withTiming(playing ? 1 : 0, { duration: 420, easing: Easing.out(Easing.cubic) });
+  }, [playing, focus]);
+  const cardStyle = useAnimatedStyle(() => ({
+    opacity: 0.6 + focus.value * 0.4,
+    transform: [{ scale: 0.93 + focus.value * 0.07 }],
+  }));
+
+  return (
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel={`Number ${rank}: post by ${reel.username || "a creator"} with ${formatNumber(
+        numeric(reel.views)
+      )} views. Open assets.`}
+      onPress={() => router.navigate("/(tabs)/assets")}
+      scaleTo={0.97}
+    >
+      <Animated.View
+        style={[
+          styles.highlight,
+          { width, height: width * 1.42, backgroundColor: colors.surfaceSecondary },
+          cardStyle,
+        ]}
+      >
+        {image ? (
+          <Animated.View style={[StyleSheet.absoluteFill, zoomStyle]}>
+            <Image source={{ uri: image }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          </Animated.View>
+        ) : (
+          <LinearGradient
+            colors={[midnight.bottom, midnight.mid, midnight.top]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+        )}
+        <LinearGradient
+          pointerEvents="none"
+          colors={["rgba(0,0,28,0.55)", "rgba(0,0,28,0)", "rgba(0,0,28,0.92)"]}
+          locations={[0, 0.4, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+
+        <View style={styles.highlightTop}>
+          <T color="#FFFFFF" style={styles.rank}>
+            {rank}
+          </T>
+          <View style={styles.kind}>
+            <Ionicons
+              name={reel.kind?.toLowerCase() === "post" ? "image" : "play"}
+              size={10}
+              color="#FFFFFF"
+            />
+            <T v="caption" color="#FFFFFF">
+              {reel.kind?.toLowerCase() === "post" ? "Post" : "Reel"}
+            </T>
+          </View>
+        </View>
+
+        <View style={{ padding: 14, gap: 2 }}>
+          <T style={styles.highlightViews} color="#FFFFFF" numberOfLines={1}>
+            {formatNumber(numeric(reel.views))}
+          </T>
+          <T v="caption" color="rgba(255,255,255,0.75)">
+            views
+          </T>
+          <T v="label" color="#FFFFFF" numberOfLines={1} style={{ marginTop: 6 }}>
+            {reel.username ? `@${reel.username.replace(/^@/, "")}` : "Creator"}
+          </T>
+        </View>
+      </Animated.View>
+    </Tap>
+  );
+}
+
+/** A segment that fills while its card is on screen, like a story bar. */
+function PlayBar({ state }: { state: "done" | "playing" | "waiting" }) {
+  const { colors } = useAppTheme();
+  const fill = useSharedValue(state === "done" ? 100 : 0);
+  useEffect(() => {
+    if (state === "playing") {
+      fill.value = 0;
+      fill.value = withTiming(100, { duration: HIGHLIGHT_SECONDS * 1000, easing: Easing.linear });
+    } else {
+      fill.value = withTiming(state === "done" ? 100 : 0, { duration: 200 });
+    }
+  }, [state, fill]);
+  const style = useAnimatedStyle(() => ({ width: `${fill.value}%` }));
+  return (
+    <View style={[styles.playBar, { backgroundColor: colors.well }]}>
+      <Animated.View style={[{ height: "100%", backgroundColor: colors.accent }, style]} />
     </View>
   );
 }
 
-// --------------------------------------------------
-// OVERVIEW SCREEN
-// --------------------------------------------------
+function Highlights({ reels }: { reels: PortalReel[] }) {
+  const { width: screen } = useWindowDimensions();
+  const cardWidth = Math.min(250, Math.round(screen * 0.6));
+  const step = cardWidth + space.md;
+
+  const top = useMemo(
+    () =>
+      [...reels]
+        .sort((a, b) => (Number(b.views) || 0) - (Number(a.views) || 0))
+        .slice(0, 6),
+    [reels]
+  );
+
+  const [active, setActive] = useState(0);
+  const scroller = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const lastTouch = useRef(0);
+
+  // Plays through the cards on its own, and waits a while after a touch.
+  useEffect(() => {
+    if (top.length < 2) return;
+    const id = setInterval(() => {
+      if (Date.now() - lastTouch.current < 7000) return;
+      setActive((current) => {
+        const next = (current + 1) % top.length;
+        scroller.current?.scrollTo({ x: next * step, animated: true });
+        return next;
+      });
+    }, HIGHLIGHT_SECONDS * 1000);
+    return () => clearInterval(id);
+  }, [top.length, step]);
+
+  if (top.length === 0) return null;
+
+  return (
+    <View style={{ gap: space.md }}>
+      <SectionTitle
+        title="Your top posts"
+        note="Ranked by views, playing in order"
+        right={
+          <Button
+            small
+            kind="ghost"
+            label="All posts"
+            onPress={() => router.navigate("/(tabs)/assets")}
+          />
+        }
+      />
+      <ScrollView
+        ref={scroller}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        decelerationRate="fast"
+        snapToInterval={step}
+        snapToAlignment="start"
+        scrollEventThrottle={32}
+        onScrollBeginDrag={() => {
+          lastTouch.current = Date.now();
+        }}
+        onScroll={(event) => {
+          const next = Math.max(
+            0,
+            Math.min(top.length - 1, Math.round(event.nativeEvent.contentOffset.x / step))
+          );
+          if (Date.now() - lastTouch.current < 7000) setActive(next);
+        }}
+        style={{ marginHorizontal: -space.xl }}
+        contentContainerStyle={{
+          paddingHorizontal: space.xl,
+          paddingRight: Math.max(space.xl, screen - cardWidth - space.xl),
+          gap: space.md,
+        }}
+      >
+        {top.map((reel, index) => (
+          <Animated.View
+            key={reel.id || reel.code || `${reel.username || "post"}-${index}`}
+            entering={FadeInRight.delay(200 + index * 90).duration(480).easing(Easing.out(Easing.cubic))}
+          >
+            <HighlightCard
+              reel={reel}
+              rank={index + 1}
+              width={cardWidth}
+              playing={index === active}
+            />
+          </Animated.View>
+        ))}
+      </ScrollView>
+      {top.length > 1 ? (
+        <View style={{ flexDirection: "row", gap: 5 }}>
+          {top.map((_, index) => (
+            <PlayBar
+              key={index}
+              state={index < active ? "done" : index === active ? "playing" : "waiting"}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shortcuts into the rest of the app
+// ---------------------------------------------------------------------------
+
+function Shortcut({
+  icon,
+  label,
+  note,
+  tone,
+  href,
+  order,
+}: {
+  icon: IconName;
+  label: string;
+  note: string;
+  tone: Tone;
+  href: Href;
+  order: number;
+}) {
+  const { colors } = useAppTheme();
+  const { fg, bg } = useTone(tone);
+  const reduced = useReducedMotion();
+
+  // Each icon bobs gently, out of step with its neighbours.
+  const bob = useSharedValue(0);
+  useEffect(() => {
+    if (reduced) return;
+    bob.value = withDelay(
+      order * 420,
+      withRepeat(
+        withSequence(
+          withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.quad) }),
+          withTiming(0, { duration: 1400, easing: Easing.inOut(Easing.quad) })
+        ),
+        -1,
+        false
+      )
+    );
+  }, [order, reduced, bob]);
+  const bobStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -bob.value * 4 }, { rotate: `${(bob.value - 0.5) * 6}deg` }],
+  }));
+
+  return (
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel={`${label}. ${note}`}
+      onPress={() => router.navigate(href)}
+      scaleTo={0.96}
+      style={[
+        styles.shortcut,
+        cardShadow(colors),
+        { backgroundColor: colors.surface, borderColor: colors.border },
+      ]}
+    >
+      <View style={[styles.shortcutIcon, { backgroundColor: bg }]}>
+        <Animated.View style={bobStyle}>
+          <Ionicons name={icon} size={22} color={fg} />
+        </Animated.View>
+      </View>
+      <View style={{ gap: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <T v="subhead">{label}</T>
+          <Ionicons name="chevron-forward" size={13} color={colors.muted} />
+        </View>
+        <T v="caption" tone="faint" numberOfLines={1}>
+          {note}
+        </T>
+      </View>
+    </Tap>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Campaign journey card
+// ---------------------------------------------------------------------------
+
+const PHASES = ["brief", "shortlist", "production", "live", "completed"] as const;
+
+function JourneyCard({ campaign, width }: { campaign: PortalCampaign; width: number }) {
+  const { colors } = useAppTheme();
+  const live = isCampaignLive(campaign);
+  const phase = campaignPhase(campaign);
+  const phaseIndex = Math.max(0, PHASES.indexOf(phase as (typeof PHASES)[number]));
+  const tone: Tone =
+    live || phase === "live"
+      ? "success"
+      : phase === "completed"
+        ? "neutral"
+        : phase === "production"
+          ? "accent"
+          : "warning";
+  const { fg } = useTone(tone);
+
+  const facts: [string, string][] = [
+    ["Budget", numeric(campaign.budget) == null ? "—" : formatCurrency(numeric(campaign.budget))],
+    ["Creators", campaign.creators == null ? "—" : String(campaign.creators.length)],
+    ["Starts", campaign.start ? formatDate(campaign.start) : "—"],
+  ];
+
+  return (
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel={`${campaign.name || "Untitled campaign"}, ${getCampaignStatus(campaign)}. Open campaigns.`}
+      onPress={() => router.navigate("/(tabs)/campaigns")}
+      scaleTo={0.97}
+      style={{ width }}
+    >
+      <Card>
+        <Pill label={getCampaignStatus(campaign)} tone={tone} live={live} />
+        <T v="heading" numberOfLines={1} style={{ marginTop: 8 }}>
+          {campaign.name || "Untitled campaign"}
+        </T>
+        <T v="caption" tone="faint" numberOfLines={1}>
+          {[campaign.service, campaign.region].filter(Boolean).join(", ") || "Campaign"}
+        </T>
+
+        {/* The five phases in order; filled up to where this campaign is */}
+        <View style={styles.phaseStrip}>
+          {PHASES.map((key, index) => (
+            <View
+              key={key}
+              style={[
+                styles.phaseDash,
+                { backgroundColor: index <= phaseIndex ? fg : colors.well },
+              ]}
+            />
+          ))}
+        </View>
+        <T v="caption" color={fg} style={{ marginTop: 6, fontFamily: fonts.sansMedium }}>
+          {campaignProgressOf(campaign)}% through
+        </T>
+
+        <View style={{ flexDirection: "row", marginTop: space.md }}>
+          {facts.map(([label, value]) => (
+            <View key={label} style={{ flex: 1 }}>
+              <T v="caption" tone="faint">
+                {label}
+              </T>
+              <T v="label" numberOfLines={1} adjustsFontSizeToFit>
+                {value}
+              </T>
+            </View>
+          ))}
+        </View>
+      </Card>
+    </Tap>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
 
 export default function OverviewScreen() {
   const { user } = useAuth();
@@ -1166,7 +1507,7 @@ export default function OverviewScreen() {
     async (isRefresh = false) => {
       if (!brandId) {
         setError(
-          "Client information is unavailable. Please sign in again."
+          "Your account details are unavailable. Please sign in again."
         );
         setLoading(false);
         setRefreshing(false);
@@ -1343,1408 +1684,517 @@ export default function OverviewScreen() {
       ? "sunny-outline"
       : "moon-outline";
 
-  // -----------------------------------------------
-  // LOADING
-  // -----------------------------------------------
+  const { colors } = useAppTheme();
+
+  // Top posts for the highlights reel. The overview still works without them.
+  const [reels, setReels] = useState<PortalReel[]>([]);
+  const loadReels = useCallback(() => {
+    if (!brandId) return;
+    getPortalReels({ brandId, clientName })
+      .then(setReels)
+      .catch(() => setReels([]));
+  }, [brandId, clientName]);
+  useEffect(() => {
+    loadReels();
+  }, [loadReels]);
+
+  const { isDark } = useAppTheme();
+  const hero = isDark ? HERO.dark : HERO.light;
+
+  const topReels = useMemo(
+    () => [...reels].sort((a, b) => (Number(b.views) || 0) - (Number(a.views) || 0)).slice(0, 3),
+    [reels]
+  );
+
+  const creatorNames = useMemo(() => {
+    const seen = new Set<string>();
+    campaigns.forEach((campaign) =>
+      (campaign.creators ?? []).forEach((creator) => {
+        const name = String((creator as AnyRecord).name || (creator as AnyRecord).handle || "").trim();
+        if (name) seen.add(name);
+      })
+    );
+    return [...seen];
+  }, [campaigns]);
+
+  const tickerLines = useMemo(() => {
+    const lines: string[] = [];
+    let best: { name: string; views: number } | null = null;
+    metricCampaigns.forEach((campaign) =>
+      (campaign.creators ?? []).forEach((creator) => {
+        const raw = creator as AnyRecord;
+        const views = numeric(raw.tracking?.views);
+        if (views != null && views > 0 && (!best || views > best.views)) {
+          best = { name: String(raw.name || raw.handle || "A creator"), views };
+        }
+      })
+    );
+    const top = best as { name: string; views: number } | null;
+    if (top) lines.push(`${top.name}'s post is at ${formatNumber(top.views)} views`);
+    if (totalCreators > 0) lines.push(`${liveCreators} of ${totalCreators} creators have posted`);
+    if (liveCampaigns > 0) {
+      lines.push(`${liveCampaigns} campaign${liveCampaigns === 1 ? " is" : "s are"} live right now`);
+    }
+    if (engagementRate != null) lines.push(`Engagement is running at ${engagementRate.toFixed(1)}%`);
+    if (campaignProgress != null) lines.push(`Campaigns in flight are ${campaignProgress}% through`);
+    return lines;
+  }, [metricCampaigns, totalCreators, liveCreators, liveCampaigns, engagementRate, campaignProgress]);
 
   if (loading) {
-    return (
-      <View style={styles.centerContainer}>
-        <View style={styles.loadingIcon}>
-          <ActivityIndicator size="large" color={COLORS.navy} />
-        </View>
-        <Text style={styles.loadingTitle}>
-          Preparing your dashboard
-        </Text>
-        <Text style={styles.loadingText}>
-          Loading your latest campaign data...
-        </Text>
-      </View>
-    );
+    return <ScreenSkeleton />;
   }
-
-  // -----------------------------------------------
-  // ERROR
-  // -----------------------------------------------
 
   if (error && !analytics) {
     return (
-      <View style={styles.centerContainer}>
-        <View style={styles.errorIcon}>
-          <Ionicons
-            name="cloud-offline-outline"
-            size={30}
-            color={COLORS.red}
-          />
-        </View>
-
-        <Text style={styles.errorTitle}>
-          Unable to load overview
-        </Text>
-
-        <Text style={styles.errorMessage}>{error}</Text>
-
-        <TouchableOpacity
-          style={styles.retryButton}
-          onPress={() => loadAnalytics()}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name="refresh"
-            size={17}
-            color="#FFFFFF"
-          />
-          <Text style={styles.retryButtonText}>
-            Try again
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <ErrorState
+        title="The overview did not load"
+        message={error}
+        onRetry={() => loadAnalytics()}
+      />
     );
   }
 
-  // -----------------------------------------------
-  // MAIN UI
-  // -----------------------------------------------
+  const hasViews = allCreators.some((creator) => creator.views != null);
+  const journeyWidth = Math.min(300, width - 84);
+  const inMotion = campaigns.filter(isCampaignActive).length;
+  const frameUnit = Math.min(118, Math.round((width - 40 - 44 - 28) / 3.2));
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={[
-        styles.content,
-        compact && styles.compactContent,
-      ]}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => loadAnalytics(true)}
-          tintColor={COLORS.navy}
-          colors={[COLORS.navy]}
-        />
-      }
+    <ScreenScroll
+      refreshing={refreshing}
+      onRefresh={() => {
+        loadAnalytics(true);
+        loadReels();
+      }}
     >
-      {/* PERSONALIZED GREETING */}
+      {/* HERO: soft panel, headline, three framed posts, key figures */}
+      <Reveal>
+        <View style={styles.hero}>
+          <LinearGradient
+            colors={[hero.ground[0], hero.ground[1], hero.ground[2]]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
 
-      <View style={styles.greetingContainer}>
-        <View style={styles.greetingTopRow}>
-          <View style={styles.greetingEyebrow}>
-            <View style={styles.greetingEyebrowDot} />
-            <Text style={styles.greetingEyebrowText}>
-              FIFTH AVENUE · CLIENT PORTAL
-            </Text>
+          <View style={styles.rowBetween}>
+            <View style={{ flex: 1, gap: 8, alignItems: "flex-start" }}>
+              <Text style={[styles.heroHello, { color: hero.sub }]} numberOfLines={1}>
+                {greeting} {greetingName}
+              </Text>
+              {liveCampaigns > 0 ? (
+                <View style={[styles.liveChip, { backgroundColor: hero.chip }]}>
+                  <PulseDot color="#22C55E" />
+                  <Text style={[styles.liveChipText, { color: hero.ink }]}>
+                    {liveCampaigns} live now
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Seal size={62} color={hero.ink} accent={hero.words[1]} />
           </View>
 
-          <View style={styles.greetingTimeIcon}>
-            <Ionicons
-              name={greetingIcon}
-              size={20}
-              color="#A78355"
+          <Text style={[styles.headline, { color: hero.ink }]}>
+            {hasViews ? (
+              <>
+                Your campaigns reached{" "}
+                <GradientWords
+                  text={`${compactCount(totalViews, 2)} views`}
+                  from={hero.words[0]}
+                  to={hero.words[1]}
+                />
+              </>
+            ) : campaigns.length > 0 ? (
+              <>
+                Your campaigns are{" "}
+                <GradientWords text="getting ready" from={hero.words[0]} to={hero.words[1]} /> to go
+                live
+              </>
+            ) : (
+              <>
+                Your space is <GradientWords text="ready" from={hero.words[0]} to={hero.words[1]} />
+              </>
+            )}
+          </Text>
+
+          <View style={styles.frames}>
+            <Frame
+              order={0}
+              reel={topReels[1]}
+              icon="megaphone"
+              width={frameUnit}
+              height={frameUnit * 1.32}
+              round={frameUnit / 2}
+              fill={FRAME_FILLS[0]}
+            />
+            <Frame
+              order={1}
+              reel={topReels[0]}
+              icon="play"
+              width={frameUnit * 1.2}
+              height={frameUnit * 1.5}
+              round={30}
+              fill={FRAME_FILLS[1]}
+            />
+            <Frame
+              order={2}
+              reel={topReels[2]}
+              icon="heart"
+              width={frameUnit}
+              height={frameUnit * 1.32}
+              round={frameUnit / 2}
+              fill={FRAME_FILLS[2]}
+            />
+          </View>
+
+          <View style={styles.heroChips}>
+            <HeroChip label="Reach" value={formatNumber(totals.reach)} ink={hero.ink} sub={hero.sub} bg={hero.chip} />
+            <HeroChip
+              label="Engagement"
+              value={engagementRate == null ? "—" : `${engagementRate.toFixed(1)}%`}
+              ink={hero.ink}
+              sub={hero.sub}
+              bg={hero.chip}
+            />
+            <HeroChip
+              label="Cost per view"
+              value={cpv === null ? "—" : `₹${cpv.toFixed(2)}`}
+              ink={hero.ink}
+              sub={hero.sub}
+              bg={hero.chip}
             />
           </View>
         </View>
+      </Reveal>
 
-        <Text style={styles.greetingLabel}>
-          {greeting}
-        </Text>
+      <Reveal index={1}>
+        <MotionCard
+          title={
+            campaigns.length === 0
+              ? "No campaigns yet"
+              : `${inMotion} campaign${inMotion === 1 ? "" : "s"} in motion`
+          }
+          lines={tickerLines}
+          names={creatorNames}
+          progress={campaignProgress}
+        />
+      </Reveal>
 
-        <Text style={styles.greetingName} numberOfLines={1}>
-          {greetingName}.
-        </Text>
+      {error ? <InlineError message={error} /> : null}
 
-        <View style={styles.greetingUnderline} />
+      <Reveal index={3}>
+        <Highlights reels={reels} />
+      </Reveal>
 
-        <Text style={styles.greetingDescription}>
-          {greetingMessage}
-        </Text>
+      <Reveal index={4}>
+        <SavingsCard spend={totalBudget} views={totalViews} />
+      </Reveal>
 
-        <View pointerEvents="none" style={styles.greetingOrb} />
-      </View>
+      <Reveal index={3} style={styles.shortcuts}>
+        <Shortcut
+          order={0}
+          icon="megaphone-outline"
+          tone="accent"
+          label="Campaigns"
+          note={
+            campaigns.length === 0
+              ? "None yet"
+              : `${campaigns.filter(isCampaignActive).length} active, ${campaigns.length} in all`
+          }
+          href="/(tabs)/campaigns"
+        />
+        <Shortcut
+          order={1}
+          icon="chatbubbles-outline"
+          tone="purple"
+          label="Insights"
+          note="Audience and trends"
+          href="/(tabs)/insights"
+        />
+        <Shortcut
+          order={2}
+          icon="play-circle-outline"
+          tone="success"
+          label="Assets"
+          note={reels.length > 0 ? `${reels.length} posts on file` : "What went live"}
+          href="/(tabs)/assets"
+        />
+        <Shortcut
+          order={3}
+          icon="receipt-outline"
+          tone="warning"
+          label="Billing"
+          note="Your statements"
+          href="/(tabs)/billing"
+        />
+      </Reveal>
 
-      {error ? (
-        <View style={styles.refreshError}>
-          <Ionicons
-            name="alert-circle-outline"
-            size={16}
-            color={COLORS.red}
-          />
-          <Text style={styles.refreshErrorText}>{error}</Text>
-        </View>
-      ) : null}
+      <Reveal index={4}>
+        <AudiencePerformanceChart campaigns={campaigns} />
+      </Reveal>
 
-      {/* CAMPAIGN PROGRESS */}
+      <SectionTitle
+        title="Campaigns"
+        note={`${campaigns.length} in total, ${liveCampaigns} live`}
+        right={
+          campaigns.length > 0 ? (
+            <Button
+              small
+              kind="ghost"
+              label="See all"
+              onPress={() => router.navigate("/(tabs)/campaigns")}
+            />
+          ) : undefined
+        }
+      />
 
-      <CampaignProgressCard
+      {recentCampaigns.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          decelerationRate="fast"
+          snapToInterval={journeyWidth + space.md}
+          snapToAlignment="start"
+          style={{ marginHorizontal: -space.xl }}
+          contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md, paddingBottom: 6 }}
+        >
+          {recentCampaigns.map((campaign, index) => (
+            <JourneyCard
+              key={campaign.id || campaign._id || `${campaign.name || "campaign"}-${index}`}
+              campaign={campaign}
+              width={journeyWidth}
+            />
+          ))}
+        </ScrollView>
+      ) : (
+        <EmptyState
+          title="No campaigns yet"
+          message="Campaigns show up here as soon as your account manager adds them."
+        />
+      )}
+
+      <SectionTitle title="Where things stand" note="Progress, activity and phases at a glance" />
+      <CampaignSnapshot
         progress={campaignProgress}
         activeCampaigns={activeCampaigns}
         totalCampaigns={campaigns.length}
         liveCreators={liveCreators}
         totalCreators={totalCreators}
+        campaigns={campaigns}
       />
 
-      {/* PERFORMANCE METRICS */}
+      <SectionTitle title="Spend split" note="Recorded spend across services" />
+      <SpendByService spend={analytics?.spendByService ?? {}} />
 
-      <View style={styles.performanceGrid}>
-        <PerformanceTile
-          icon="eye-outline"
-          label="Total views"
-          value={allCreators.some((creator) => creator.views != null) ? formatNumber(totalViews) : "—"}
-          accent="#6257D9"
-        />
-        <PerformanceTile
-          icon="people-outline"
-          label="Reach"
-          value={formatNumber(totals.reach)}
-          accent="#4D5DCE"
-        />
-        <PerformanceTile
-          icon="trending-up-outline"
-          label="Engagement"
-          value={engagementRate == null ? "—" : `${engagementRate.toFixed(1)}%`}
-          accent="#239B70"
-        />
-        <PerformanceTile
-          icon="layers-outline"
-          label="CPV"
-          value={cpv === null ? "—" : `₹${cpv.toFixed(4)}`}
-          accent="#6D62C7"
-        />
-      </View>
-
-      <Text style={styles.metricFootnote}>
-        {estimatedSavings == null
-          ? "Savings vs. industry benchmark: —"
-          : `Estimated savings vs. ₹0.30 industry CPV: ${formatCurrency(estimatedSavings)}`}
-      </Text>
-
-      <AudiencePerformanceChart campaigns={campaigns} />
-
-     
-
-      
-
-      {/* CAMPAIGN SUMMARY */}
-
-      <SectionHeading
-        title="Campaign summary"
-        subtitle="A quick look at your activity"
-      />
-
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryIconWrap}>
-            <Ionicons
-              name="briefcase-outline"
-              size={19}
-              color={COLORS.navy}
-            />
-          </View>
-
-          <View style={styles.summaryText}>
-            <Text style={styles.summaryLabel}>
-              Total campaigns
-            </Text>
-            <Text style={styles.summaryDescription}>
-              Campaigns available in your portal
-            </Text>
-          </View>
-
-          <Text style={styles.summaryValue}>
-            {campaigns.length}
-          </Text>
-        </View>
-
-        <View style={styles.separator} />
-
-        <View style={styles.summaryRow}>
-          <View
-            style={[
-              styles.summaryIconWrap,
-              { backgroundColor: COLORS.greenLight },
-            ]}
-          >
-            <Ionicons
-              name="radio-outline"
-              size={19}
-              color={COLORS.green}
-            />
-          </View>
-
-          <View style={styles.summaryText}>
-            <Text style={styles.summaryLabel}>
-              Live campaigns
-            </Text>
-            <Text style={styles.summaryDescription}>
-              Campaigns with at least one live creator
-            </Text>
-          </View>
-
-          <Text style={styles.summaryValue}>
-            {liveCampaigns}
-          </Text>
-        </View>
-
-        <View style={styles.separator} />
-
-        <View style={styles.summaryRow}>
-          <View
-            style={[
-              styles.summaryIconWrap,
-              { backgroundColor: COLORS.lavenderLight },
-            ]}
-          >
-            <Ionicons
-              name="trending-up-outline"
-              size={19}
-              color={COLORS.lavender}
-            />
-          </View>
-
-          <View style={styles.summaryText}>
-            <Text style={styles.summaryLabel}>
-              Engagement rate
-            </Text>
-            <Text style={styles.summaryDescription}>
-              Average measured likes + comments per tracked view
-            </Text>
-          </View>
-
-          <Text style={styles.summaryValue}>
-            {engagementRate == null ? "—" : `${engagementRate.toFixed(2)}%`}
-          </Text>
-        </View>
-      </View>
-
-      {/* SPEND BREAKDOWN */}
-
-      <SectionHeading
-        title="Spend breakdown"
-        subtitle="Recorded spend across services"
-      />
-
-      <SpendByService
-        spend={analytics?.spendByService ?? {}}
-      />
-
-      {/* RECENT CAMPAIGNS */}
-
-      <SectionHeading
-        title="Recent campaigns"
-        subtitle="Your latest campaign activity"
-        right={
-          <View style={styles.countPill}>
-            <Text style={styles.countPillText}>
-              {campaigns.length} total
-            </Text>
-          </View>
-        }
-      />
-
-      {recentCampaigns.length > 0 ? (
-        recentCampaigns.map((campaign, index) => (
-          <RecentCampaignCard
-            key={
-              campaign.id ||
-              campaign._id ||
-              `${campaign.name || "campaign"}-${index}`
-            }
-            campaign={campaign}
-          />
-        ))
-      ) : (
+      {events.length === 0 ? (
         <EmptyState
-          title="No campaigns yet"
-          description="Your campaigns will appear here when they are added to your client portal."
-        />
-      )}
-
-      {/* ANALYTICS EMPTY STATE */}
-
-      {events.length === 0 && (
-        <EmptyState
-          title="Analytics are not available yet"
-          description="Your campaign analytics will appear here when reporting data becomes available."
           icon="analytics-outline"
+          title="Analytics are on the way"
+          message="Reach and engagement appear here once reporting data comes in."
         />
-      )}
+      ) : null}
 
-      {/* FOOTER */}
-
-      <View style={styles.footer}>
-        <View style={styles.footerLine} />
-        <Text style={styles.footerText}>
-          FIFTH AVENUE
-        </Text>
-        <Text style={styles.footerCaption}>
-          Your client dashboard
-        </Text>
-      </View>
-    </ScrollView>
+    </ScreenScroll>
   );
 }
 
-// --------------------------------------------------
-// STYLES
-// --------------------------------------------------
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 58,
-    paddingBottom: 42,
-  },
-
-  compactContent: {
-    paddingHorizontal: 16,
-  },
-
-  centerContainer: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 28,
-  },
-
-  loadingIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 22,
-    backgroundColor: "#FFFFFF",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  loadingTitle: {
-    color: COLORS.navy,
-    fontSize: 17,
-    fontWeight: "700",
-    marginTop: 20,
-  },
-
-  loadingText: {
-    marginTop: 8,
-    color: COLORS.muted,
-    fontSize: 13,
-  },
-
-  greetingContainer: {
-    position: "relative",
-    minHeight: 205,
-    backgroundColor: "#FDF9F3",
-    borderRadius: 24,
-    paddingHorizontal: 21,
-    paddingTop: 19,
-    paddingBottom: 21,
-    marginBottom: 29,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "#F1E8DC",
-  },
-
-  greetingTopRow: {
+  rowBetween: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 22,
+    gap: space.md,
   },
-
-  greetingEyebrow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  greetingEyebrowDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.green,
-    marginRight: 7,
-  },
-
-  greetingEyebrowText: {
-    color: "#8B8175",
-    fontSize: 9,
-    fontWeight: "800",
-    letterSpacing: 1.25,
-  },
-
-  greetingTimeIcon: {
-    width: 37,
-    height: 37,
-    borderRadius: 13,
-    backgroundColor: "#F4EBDD",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  greetingLabel: {
-    color: COLORS.navy,
-    fontFamily: "serif",
-    fontSize: 19,
-    fontStyle: "italic",
-    fontWeight: "600",
-  },
-
-  greetingName: {
-    color: COLORS.navy,
-    fontFamily: "serif",
-    fontSize: 39,
-    fontStyle: "italic",
-    fontWeight: "700",
-    letterSpacing: -1.2,
-    marginTop: 1,
-    maxWidth: "100%",
-  },
-
-  greetingUnderline: {
-    width: 91,
-    height: 3,
-    borderRadius: 5,
-    backgroundColor: "#C9A46D",
-    marginTop: 9,
-    marginBottom: 14,
-    transform: [{ rotate: "-3deg" }],
-  },
-
-  greetingDescription: {
-    color: COLORS.navyLight,
-    fontSize: 12,
-    lineHeight: 19,
-    fontWeight: "500",
-    maxWidth: "88%",
-    zIndex: 1,
-  },
-
-  greetingOrb: {
-    position: "absolute",
-    width: 145,
-    height: 145,
-    borderRadius: 73,
-    right: -76,
-    top: 66,
-    backgroundColor: "#F4EBDD",
-    opacity: 0.75,
-  },
-
-  sectionHeading: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 15,
-    marginTop: 7,
-  },
-
-  sectionHeadingText: {
-    flex: 1,
-  },
-
-  sectionTitle: {
-    color: COLORS.navy,
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: -0.3,
-  },
-
-  sectionSubtitle: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 5,
-  },
-
-  metricsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    marginBottom: 25,
-  },
-
-  metricCard: {
-    width: "48.2%",
-    minHeight: 151,
-    backgroundColor: COLORS.surface,
-    borderRadius: CARD_RADIUS,
-    padding: 15,
-    marginBottom: 11,
-    borderWidth: 1,
-    borderColor: "#F0EFEB",
-  },
-
-  metricTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 13,
-  },
-
-  metricIcon: {
-    width: 35,
-    height: 35,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  metricLabel: {
-    color: COLORS.muted,
-    fontSize: 11,
-    fontWeight: "600",
-  },
-
-  metricValue: {
-    color: COLORS.navy,
-    fontSize: 24,
-    fontWeight: "800",
-    marginTop: 7,
-    letterSpacing: -0.6,
-  },
-
-  metricDescription: {
-    color: "#A3A8B0",
-    fontSize: 10,
-    marginTop: 5,
-  },
-
-  progressCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingTop: 15,
-    paddingBottom: 15,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: "#ECEEF4",
-    shadowColor: "#1C2940",
-    shadowOpacity: 0.055,
-    shadowRadius: 15,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 3,
-  },
-
-  progressCardHeading: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-
-  progressCardTitle: {
-    color: COLORS.navy,
-    fontSize: 13,
-    fontWeight: "800",
-    letterSpacing: -0.2,
-  },
-
-  progressCardHint: {
-    color: "#9A9EAA",
-    fontSize: 9,
-    fontWeight: "500",
-  },
-
-  progressOverviewRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-    minHeight: 154,
-  },
-
-  progressMetricList: {
-    flex: 1,
-    minWidth: 0,
-    gap: 7,
-  },
-
-  progressMetricRow: {
+  hero: { borderRadius: 30, overflow: "hidden", padding: 22, paddingBottom: 20 },
+  heroHello: { fontFamily: fonts.sansMedium, fontSize: 13, lineHeight: 18 },
+  liveChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
-    paddingVertical: 7,
-    paddingHorizontal: 7,
-    borderRadius: 11,
-    borderLeftWidth: 3,
-    borderLeftColor: "transparent",
-    backgroundColor: "transparent",
-  },
-
-  progressMetricRowActive: {
-    backgroundColor: "#F8F8FC",
-    borderTopLeftRadius: 4,
-    borderBottomLeftRadius: 4,
-  },
-
-  progressMetricDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    flexShrink: 0,
-  },
-
-  progressMetricCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  progressMetricLabel: {
-    color: "#667085",
-    fontSize: 9,
-    fontWeight: "700",
-  },
-
-  progressMetricValue: {
-    color: COLORS.navy,
-    fontSize: 14,
-    fontWeight: "800",
-    marginTop: 2,
-  },
-
-  progressMetricDescription: {
-    color: "#A3A8B0",
-    fontSize: 8,
-    marginTop: 1,
-  },
-
-  progressRingsStage: {
-    position: "relative",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-
-  progressRingTouch: {
-    position: "absolute",
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 999,
-  },
-
-  progressRingGlow: {
-    position: "absolute",
-    top: 3,
-    left: 3,
-    right: 3,
-    bottom: 3,
-    borderWidth: 1,
-    borderRadius: 999,
-    opacity: 0.22,
-  },
-
-  progressRingCenter: {
-    position: "absolute",
-    width: "31%",
-    height: "31%",
-    borderRadius: 999,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  progressRingCenterValue: {
-    fontSize: 11,
-    fontWeight: "800",
-  },
-
-  progressRingCenterLabel: {
-    color: "#9298A5",
-    fontSize: 6,
-    fontWeight: "800",
-    letterSpacing: 0.6,
-    marginTop: 2,
-  },
-
-  performanceGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    marginBottom: 24,
-  },
-
-  performanceTile: {
-    width: "48.5%",
-    minHeight: 68,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 15,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 9,
-    borderWidth: 1,
-    borderColor: "#F0EFEB",
-    shadowColor: "#1C2940",
-    shadowOpacity: 0.035,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 1,
+    height: 30,
+    borderRadius: radius.pill,
   },
-
-  performanceTileTop: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 6,
-  },
-
-  performanceTileValue: {
-    color: COLORS.navy,
-    fontSize: 17,
-    fontWeight: "800",
-    flexShrink: 1,
-  },
-
-  performanceTileLabel: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: "600",
-    marginTop: 6,
-  },
-
-  metricFootnote: {
-    color: COLORS.muted,
-    fontSize: 10,
-    lineHeight: 15,
-    marginTop: -14,
-    marginBottom: 25,
-    paddingHorizontal: 3,
-  },
-
-  performanceChartCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 17,
-    marginBottom: 25,
-    borderWidth: 1,
-    borderColor: "#F0EEF7",
-    shadowColor: "#25204A",
-    shadowOpacity: 0.035,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 1,
-  },
-  performanceChartHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 14,
-  },
-  performanceChartTitle: {
-    color: COLORS.navy,
-    fontSize: 16,
-    fontWeight: "800",
-    letterSpacing: -0.25,
-  },
-  chartPeriodDropdown: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: "#F7F6FA",
-  },
-  chartPeriodDropdownText: { color: COLORS.navy, fontSize: 10, fontWeight: "700" },
-  performanceTabs: {
-    flexDirection: "row",
-    alignSelf: "flex-start",
-    padding: 3,
-    borderRadius: 20,
-    backgroundColor: "#F4F2F8",
-    marginBottom: 12,
-  },
-  performanceTab: { paddingHorizontal: 15, paddingVertical: 7, borderRadius: 16 },
-  performanceTabActive: { backgroundColor: "#242E73" },
-  performanceTabText: { color: COLORS.muted, fontSize: 10, fontWeight: "700" },
-  performanceTabTextActive: { color: "#FFFFFF" },
-  performanceValueRow: { flexDirection: "row", alignItems: "center", gap: 9, marginBottom: 8 },
-  performanceChartValue: { color: COLORS.navy, fontSize: 29, fontWeight: "800", letterSpacing: -0.8 },
-  growthPill: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 12, backgroundColor: "#EAF7F0" },
-  growthText: { fontSize: 10, fontWeight: "800" },
-  performancePlot: { alignSelf: "center", position: "relative", marginTop: 2, marginBottom: 4 },
-  performanceGridLine: { position: "absolute", height: 1, backgroundColor: "#F0EFF5" },
-  performanceLineSegment: { position: "absolute", height: 2.5, backgroundColor: "#6257D9", borderRadius: 3 },
-  performancePoint: { position: "absolute", width: 8, height: 8, borderRadius: 4, backgroundColor: "#FFFFFF", borderWidth: 2, borderColor: "#6257D9" },
-  performancePlotEmpty: { alignItems: "center", justifyContent: "center" },
-  performanceAxis: { flexDirection: "row", justifyContent: "space-between", marginTop: 7 },
-  performancePeriodRow: { flexDirection: "row", alignSelf: "flex-end", gap: 5, marginTop: 12 },
-  performancePeriodButton: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8 },
-  performancePeriodButtonActive: { backgroundColor: "#242E73" },
-  performancePeriodText: { color: COLORS.muted, fontSize: 9, fontWeight: "700" },
-  performancePeriodTextActive: { color: "#FFFFFF" },
-
-  chartCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: CARD_RADIUS,
-    padding: 18,
-    marginBottom: 28,
-    borderWidth: 1,
-    borderColor: "#F0EFEB",
-  },
-
-  chartTopRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-
-  chartEyebrow: {
-    color: COLORS.muted,
-    fontSize: 9,
-    fontWeight: "800",
-    letterSpacing: 1.3,
-  },
-
-  chartMainValue: {
-    color: COLORS.navy,
-    fontSize: 27,
-    fontWeight: "800",
-    marginTop: 7,
-  },
-
-  chartDescription: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 3,
-  },
-
-  chartLegend: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 5,
-  },
-
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.lavender,
-    marginRight: 6,
-  },
-
-  legendText: {
-    color: COLORS.muted,
-    fontSize: 10,
-  },
-
-  periodSelector: {
-    flexDirection: "row",
-    alignSelf: "flex-start",
-    backgroundColor: "#F4F3F0",
-    borderRadius: 10,
-    padding: 3,
-    marginTop: 19,
-    marginBottom: 18,
-  },
-
-  periodButton: {
-    paddingHorizontal: 13,
-    paddingVertical: 7,
-    borderRadius: 8,
-  },
-
-  periodButtonActive: {
-    backgroundColor: COLORS.navy,
-  },
-
-  periodText: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: "700",
-  },
-
-  periodTextActive: {
-    color: "#FFFFFF",
-  },
-
-  barChart: {
-    height: 126,
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-around",
-    paddingHorizontal: 2,
-  },
-
-  barColumn: {
-    flex: 1,
-    height: 118,
-    alignItems: "center",
-    justifyContent: "flex-end",
-    marginHorizontal: 3,
-  },
-
-  barTrack: {
-    height: 112,
-    width: "72%",
-    justifyContent: "flex-end",
-    alignItems: "center",
-    backgroundColor: "#F5F4F8",
-    borderRadius: 7,
-    overflow: "hidden",
-  },
-
-  reachBar: {
-    width: "100%",
-    backgroundColor: "#C9C5E5",
-    borderTopLeftRadius: 7,
-    borderTopRightRadius: 7,
-  },
-
-  reachBarActive: {
-    backgroundColor: COLORS.navy,
-  },
-
-  chartAxis: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 12,
-  },
-
-  axisText: {
-    color: "#A0A5AE",
-    fontSize: 9,
-  },
-
-  chartEmpty: {
-    minHeight: 130,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  chartEmptyText: {
-    color: COLORS.muted,
-    fontSize: 11,
+  liveChipText: { fontFamily: fonts.sansMedium, fontSize: 12 },
+  headline: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 34,
+    lineHeight: 40,
+    letterSpacing: -0.9,
     textAlign: "center",
-    marginTop: 9,
-    lineHeight: 17,
+    marginTop: 14,
   },
-
-  summaryCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: CARD_RADIUS,
-    paddingHorizontal: 16,
-    marginBottom: 28,
-    borderWidth: 1,
-    borderColor: "#F0EFEB",
-  },
-
-  summaryRow: {
-    minHeight: 78,
+  frames: {
     flexDirection: "row",
     alignItems: "center",
-  },
-
-  summaryIconWrap: {
-    width: 39,
-    height: 39,
-    borderRadius: 13,
-    backgroundColor: "#F0F1F5",
     justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
+    gap: 14,
+    marginTop: 22,
   },
-
-  summaryText: {
-    flex: 1,
-  },
-
-  summaryLabel: {
-    color: COLORS.navy,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-
-  summaryDescription: {
-    color: COLORS.muted,
-    fontSize: 10,
-    marginTop: 4,
-    maxWidth: 190,
-  },
-
-  summaryValue: {
-    color: COLORS.navy,
-    fontSize: 18,
-    fontWeight: "800",
-    marginLeft: 8,
-  },
-
-  separator: {
-    height: 1,
-    backgroundColor: COLORS.border,
-  },
-
-  serviceCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 22,
-    padding: 18,
-    marginBottom: 28,
-    borderWidth: 1,
-    borderColor: "#EFEDF5",
-    shadowColor: "#25204A",
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 2,
-  },
-
-  spendHeader: {
+  frameChip: {
+    position: "absolute",
+    bottom: 10,
+    alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 15,
+    gap: 4,
+    paddingHorizontal: 9,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(255,255,255,0.92)",
   },
-  spendHeaderText: {
-    flex: 1,
-  },
-  spendTitle: {
-    color: COLORS.navy,
-    fontSize: 15,
-    fontWeight: "800",
-    letterSpacing: -0.2,
-  },
-  spendSubtitle: {
-    color: COLORS.muted,
-    fontSize: 10,
-    marginTop: 4,
-  },
-  spendHeaderIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 13,
-    backgroundColor: "#F0EEFC",
-    alignItems: "center",
-    justifyContent: "center",
-    marginLeft: 10,
-  },
-  spendChartContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    minHeight: 132,
-  },
-  spendDonutWrap: {
-    width: 124,
-    height: 124,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  spendDonutCenter: {
+  frameChipText: { fontFamily: fonts.sansSemi, fontSize: 10.5, color: "#16131F" },
+  heroChips: { flexDirection: "row", gap: 8, marginTop: 22 },
+  heroChip: { flex: 1, borderRadius: 18, paddingVertical: 11, paddingHorizontal: 8, alignItems: "center" },
+  heroChipValue: { fontFamily: fonts.sansSemi, fontSize: 17, lineHeight: 22, letterSpacing: -0.3 },
+  heroChipLabel: { fontFamily: fonts.sans, fontSize: 10.5, lineHeight: 15 },
+  tickerWindow: { height: 22, overflow: "hidden", justifyContent: "center" },
+  tickerText: {
     position: "absolute",
     left: 0,
     right: 0,
-    top: 0,
-    bottom: 0,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 17,
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    lineHeight: 22,
   },
-  spendDonutCaption: {
-    color: "#9290A5",
-    fontSize: 8,
-    fontWeight: "800",
-    letterSpacing: 1,
+  darkCard: { borderRadius: 24, padding: 22, overflow: "hidden" },
+  cardDot: { position: "absolute", top: 16, right: 16, width: 8, height: 8, borderRadius: 4 },
+  darkLabel: { fontFamily: fonts.sansMedium, fontSize: 14, color: "rgba(255,255,255,0.7)" },
+  darkFigure: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 46,
+    lineHeight: 54,
+    letterSpacing: -1.4,
+    color: "#FFFFFF",
+    marginTop: 2,
   },
-  spendDonutValue: {
-    color: COLORS.navy,
-    fontSize: 17,
-    fontWeight: "800",
-    marginTop: 4,
-    maxWidth: "100%",
+  darkBody: {
+    fontFamily: fonts.sans,
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: "rgba(255,255,255,0.62)",
+    marginTop: 6,
   },
-  spendLegend: {
-    flex: 1,
-    minWidth: 0,
-    gap: 14,
-    paddingVertical: 5,
-  },
-  spendLegendRow: {
+  darkFoot: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 8,
+    marginTop: 18,
   },
-  spendLegendLabelGroup: {
+  square: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  percentChip: {
+    height: 38,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  squareText: { fontFamily: fonts.sansSemi, fontSize: 13, color: "#FFFFFF" },
+  whiteButton: {
     flexDirection: "row",
     alignItems: "center",
-    flex: 1,
-    minWidth: 0,
-    gap: 8,
+    gap: 6,
+    height: 36,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
   },
-  spendLegendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    flexShrink: 0,
+  whiteButtonText: { fontFamily: fonts.sansMedium, fontSize: 12.5, color: "#0D0B14" },
+  lightCard: {
+    borderRadius: 24,
+    padding: 22,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  spendLegendName: {
-    color: COLORS.text,
-    fontSize: 10,
-    fontWeight: "600",
-    flexShrink: 1,
-  },
-  spendLegendPercent: {
-    color: COLORS.navy,
-    fontSize: 10,
-    fontWeight: "800",
-    minWidth: 35,
-    textAlign: "right",
-  },
-  serviceEmpty: {
-    paddingVertical: 22,
+  go: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
+  news: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: 10,
+    marginTop: space.md,
+    paddingHorizontal: 12,
+    height: 38,
+    borderRadius: radius.pill,
   },
-  spendEmptyIcon: {
+  gauge: { flex: 1, alignItems: "center", gap: 8 },
+  gaugeRing: { width: 78, height: 78, alignItems: "center", justifyContent: "center" },
+  gaugeValue: {
+    position: "absolute",
+    maxWidth: 54,
+    fontFamily: fonts.serifMedium,
+    fontSize: 19,
+    lineHeight: 24,
+    textAlign: "center",
+  },
+  stack: { flexDirection: "row", height: 12, borderRadius: 6, overflow: "hidden", gap: 2 },
+  spendLine: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 11 },
+  percent: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, minWidth: 46, alignItems: "center" },
+  lightTitle: { fontFamily: fonts.serifMedium, fontSize: 26, lineHeight: 32, letterSpacing: -0.5 },
+  highlight: { borderRadius: radius.xl, overflow: "hidden", justifyContent: "space-between" },
+  highlightTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    padding: 14,
+  },
+  rank: { fontFamily: fonts.serifItalic, fontSize: 44, lineHeight: 46, opacity: 0.9 },
+  kind: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(0,0,28,0.45)",
+  },
+  highlightViews: { fontFamily: fonts.serifMedium, fontSize: 34, lineHeight: 38, letterSpacing: -0.8 },
+  playBar: { flex: 1, height: 3, borderRadius: 2, overflow: "hidden" },
+  shortcuts: { flexDirection: "row", flexWrap: "wrap", gap: space.md },
+  shortcut: {
+    flexGrow: 1,
+    flexBasis: "45%",
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: space.lg,
+    gap: space.md,
+  },
+  shortcutIcon: {
     width: 46,
     height: 46,
     borderRadius: 16,
-    backgroundColor: "#F0EEFC",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 10,
   },
-  spendEmptyTitle: {
-    color: COLORS.navy,
-    fontSize: 12,
-    fontWeight: "700",
-    marginTop: 1,
-  },
-
-  countPill: {
-    backgroundColor: "#ECEEF3",
-    borderRadius: 20,
+  phaseStrip: { flexDirection: "row", gap: 4, marginTop: space.md },
+  phaseDash: { flex: 1, height: 4, borderRadius: 2 },
+  growth: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
     paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-
-  countPillText: {
-    color: COLORS.navy,
-    fontSize: 10,
-    fontWeight: "700",
-  },
-
-  campaignCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: CARD_RADIUS,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "#F0EFEB",
-  },
-
-  campaignTopRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-
-  campaignTitleContainer: {
-    flex: 1,
-    marginRight: 8,
-  },
-
-  campaignName: {
-    color: COLORS.navy,
-    fontSize: 14,
-    fontWeight: "700",
-    lineHeight: 20,
-  },
-
-  campaignService: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 5,
-  },
-
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-
-  liveBadge: {
-    backgroundColor: COLORS.greenLight,
-  },
-
-  defaultBadge: {
-    backgroundColor: "#F1F2F4",
-  },
-
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 5,
-  },
-
-  liveDot: {
-    backgroundColor: COLORS.green,
-  },
-
-  defaultDot: {
-    backgroundColor: "#8A8F98",
-  },
-
-  statusText: {
-    fontSize: 9,
-    fontWeight: "700",
-  },
-
-  liveText: {
-    color: "#18794E",
-  },
-
-  defaultText: {
-    color: "#667085",
-  },
-
-  campaignDivider: {
-    height: 1,
-    backgroundColor: COLORS.border,
-    marginVertical: 14,
-  },
-
-  campaignDetailsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-
-  campaignDetail: {
-    flex: 1,
-  },
-
-  campaignDetailLabel: {
-    color: "#A0A5AE",
-    fontSize: 9,
-    fontWeight: "700",
+    paddingVertical: 5,
+    borderRadius: radius.pill,
     marginBottom: 6,
-    letterSpacing: 0.5,
   },
-
-  campaignDetailValue: {
-    color: COLORS.navy,
-    fontSize: 11,
-    fontWeight: "700",
-  },
-
-  emptyCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: CARD_RADIUS,
-    padding: 22,
-    alignItems: "center",
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: "#F0EFEB",
-  },
-
-  emptyIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: COLORS.lavenderLight,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 13,
-  },
-
-  emptyTitle: {
-    color: COLORS.navy,
-    fontSize: 14,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-
-  emptyMessage: {
-    color: COLORS.muted,
-    fontSize: 11,
-    lineHeight: 18,
-    marginTop: 7,
-    textAlign: "center",
-  },
-
-  errorIcon: {
-    width: 62,
-    height: 62,
-    borderRadius: 20,
-    backgroundColor: "#FBECEC",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 18,
-  },
-
-  errorTitle: {
-    fontSize: 19,
-    fontWeight: "700",
-    color: COLORS.navy,
-    marginBottom: 8,
-  },
-
-  errorMessage: {
-    color: COLORS.muted,
-    textAlign: "center",
-    lineHeight: 21,
-    fontSize: 13,
-  },
-
-  retryButton: {
-    backgroundColor: COLORS.navy,
-    paddingHorizontal: 23,
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginTop: 22,
+  chartEmpty: { height: 130, alignItems: "center", justifyContent: "center", gap: 8 },
+  snapshotRow: { flexDirection: "row", alignItems: "center", gap: space.lg },
+  snapshotItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: radius.md,
   },
-
-  retryButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-    fontSize: 12,
-  },
-
-  refreshError: {
-    backgroundColor: "#FCEDEC",
-    borderRadius: 12,
-    padding: 11,
-    marginBottom: 15,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-
-  refreshErrorText: {
-    color: COLORS.red,
-    fontSize: 11,
-    flex: 1,
-  },
-
-  footer: {
-    alignItems: "center",
-    marginTop: 27,
-  },
-
-  footerLine: {
-    width: 35,
-    height: 3,
-    borderRadius: 3,
-    backgroundColor: COLORS.lavender,
-    marginBottom: 13,
-  },
-
-  footerText: {
-    color: COLORS.navy,
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 2,
-  },
-
-  footerCaption: {
-    color: "#A0A5AE",
-    fontSize: 9,
-    marginTop: 5,
-  },
+  snapshotDot: { width: 8, height: 8, borderRadius: 4 },
+  spendRow: { flexDirection: "row", alignItems: "center", gap: space.xl },
+  legendRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  legendDot: { width: 9, height: 9, borderRadius: 5 },
 });

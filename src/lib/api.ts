@@ -1,4 +1,27 @@
+import { Platform } from "react-native";
+import Constants from "expo-constants";
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL?.replace(/\/+$/, "");
+
+// In development the backend usually runs on the same machine as the Expo
+// dev server. On a simulator "localhost" resolves to that machine, but on a
+// physical phone it resolves to the phone itself, so the request fails.
+// Expo tells us the dev server's address, so reuse its host and keep the
+// port from EXPO_PUBLIC_API_URL.
+function resolveDevHost(url: string): string {
+  if (Platform.OS === "web") return url;
+  if (!/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(url)) return url;
+
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    (Constants as unknown as { expoGoConfig?: { debuggerHost?: string } }).expoGoConfig
+      ?.debuggerHost;
+
+  const devHost = hostUri?.split("/")[0]?.split(":")[0];
+  if (!devHost || devHost === "localhost" || devHost === "127.0.0.1") return url;
+
+  return url.replace(/^(https?:\/\/)[^/:]+/i, `$1${devHost}`);
+}
 
 // ---------------------------------------------
 // TYPES
@@ -187,14 +210,19 @@ export type PortalClient = {
 // COMMON API HELPERS
 // ---------------------------------------------
 
+let resolvedApiUrl: string | null = null;
+
 function getApiUrl(): string {
+  if (resolvedApiUrl) return resolvedApiUrl;
+
   if (!API_BASE_URL) {
     throw new Error(
       "Backend URL is missing. Please configure EXPO_PUBLIC_API_URL in .env."
     );
   }
 
-  return API_BASE_URL;
+  resolvedApiUrl = resolveDevHost(API_BASE_URL);
+  return resolvedApiUrl;
 }
 
 function buildScopeParams(scope: PortalScope): string {

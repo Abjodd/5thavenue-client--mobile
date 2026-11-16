@@ -9,39 +9,16 @@ import React, {
 import { useColorScheme } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { palettes, type Palette } from "../ui/theme";
+
 export type ThemeChoice = "light" | "dark" | "system";
 
-const COLORS = {
-  light: {
-    background: "#F8F7F4",
-    surface: "#FFFFFF",
-    surfaceSecondary: "#F0F2F6",
-    text: "#17243A",
-    muted: "#818895",
-    border: "#E9EAF0",
-    primary: "#17243A",
-    input: "#FFFFFF",
-    selected: "#F5F7FA",
-    icon: "#53617A",
-  },
-  dark: {
-    background: "#101827",
-    surface: "#1B2638",
-    surfaceSecondary: "#263348",
-    text: "#F4F6FA",
-    muted: "#A5AFBF",
-    border: "#344258",
-    primary: "#9DB7FF",
-    input: "#263348",
-    selected: "#293951",
-    icon: "#C0CBE0",
-  },
-};
+const COLORS = palettes;
 
 type ThemeContextType = {
   theme: ThemeChoice;
   setTheme: (theme: ThemeChoice) => Promise<void>;
-  colors: typeof COLORS.light;
+  colors: Palette;
   isDark: boolean;
   isThemeReady: boolean;
 };

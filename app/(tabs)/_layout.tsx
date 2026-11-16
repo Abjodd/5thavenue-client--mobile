@@ -1,49 +1,51 @@
 import React, { useEffect, useState } from "react";
-
-import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  Image,
-} from "react-native";
-
-import {
-  Tabs,
-  router,
-  type Href,
-  usePathname,
-} from "expo-router";
-
+import { Image, Pressable, StyleSheet, View } from "react-native";
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeInUp,
+  FadeOut,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import { Redirect, Tabs, router, usePathname, type Href } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 
 import { useAuth } from "../../src/context/AuthContext";
+import { useAppTheme } from "../../src/context/ThemeContext";
 import { getPortalAvatarUrl } from "../../src/lib/api";
+import { Glass } from "../../src/ui/Glass";
+import { Hairline, T, Tap, tick, type IconName } from "../../src/ui/primitives";
+import { fonts, radius, springs } from "../../src/ui/theme";
 
-// ---------------------------------------------
-// TOP HEADER
-// ---------------------------------------------
+type BottomTabBarProps = Parameters<
+  NonNullable<React.ComponentProps<typeof Tabs>["tabBar"]>
+>[0];
+
+// ---------------------------------------------------------------------------
+// Header: a floating pane of glass that the page scrolls beneath
+// ---------------------------------------------------------------------------
 
 function AppHeader() {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
-
+  const { colors, isDark, setTheme } = useAppTheme();
   const { user, signOut } = useAuth();
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
 
-  // Close dropdown whenever the current route changes.
+  // Close the menu whenever the route changes.
   useEffect(() => {
     setMenuVisible(false);
   }, [pathname]);
 
-  const userName =
-    user?.name ||
-    user?.email?.split("@")[0] ||
-    "Client";
+  const userName = user?.name || user?.email?.split("@")[0] || "You";
 
   const avatar =
     user?.id && user.hasAvatar === true
@@ -54,532 +56,375 @@ function AppHeader() {
 
   const showAvatar = !!avatar && !avatarFailed;
 
-  // ---------------------------------------------
-  // OPEN SETTINGS
-  // ---------------------------------------------
-
   const openSettings = () => {
     setMenuVisible(false);
-
-    router.push({
-      pathname: "/settings",
-      params: { section: "profile" },
-    });
+    router.push({ pathname: "/settings", params: { section: "profile" } });
   };
-
-  // ---------------------------------------------
-  // SIGN OUT
-  // ---------------------------------------------
 
   const handleSignOut = () => {
     setMenuVisible(false);
     signOut();
-    router.replace("/(auth)/login");
+    router.replace("/");
   };
 
+  const menuItems: { icon: IconName; label: string; onPress: () => void; danger?: boolean }[] = [
+    { icon: "person-outline", label: "Profile and settings", onPress: openSettings },
+    {
+      icon: isDark ? "sunny-outline" : "moon-outline",
+      label: isDark ? "Switch to light" : "Switch to dark",
+      onPress: () => {
+        setTheme(isDark ? "light" : "dark");
+        setMenuVisible(false);
+      },
+    },
+    { icon: "log-out-outline", label: "Sign out", onPress: handleSignOut, danger: true },
+  ];
+
   return (
-    <View
-      style={[
-        styles.headerWrapper,
-        { paddingTop: insets.top + 7 },
-      ]}
-    >
-      <View style={styles.headerContent}>
-
-        {/* BRAND */}
-        <Pressable
-          onPress={() => {
-            setMenuVisible(false);
-            router.replace("/(tabs)/overview");
-          }}
-          style={styles.brandContainer}
-        >
-          <Text style={styles.brandText}>
-            FIFTH <Text style={styles.brandAccent}>AVENUE</Text>
-          </Text>
-        </Pressable>
-
-        {/* PROFILE */}
-        <Pressable
-          style={styles.profileButton}
-          onPress={() => setMenuVisible((prev) => !prev)}
-        >
-          {showAvatar ? (
+    <View pointerEvents="box-none" style={{ zIndex: 20 }}>
+      <View pointerEvents="box-none" style={[styles.headerWrap, { paddingTop: insets.top + 8 }]}>
+        <Glass dark={isDark} radius={29} style={styles.headerGlass} contentStyle={styles.header}>
+          <Tap
+            accessibilityRole="button"
+            accessibilityLabel="Fifth Avenue, go to overview"
+            onPress={() => {
+              setMenuVisible(false);
+              router.navigate("/(tabs)/overview");
+            }}
+            style={styles.brand}
+          >
             <Image
-              source={{ uri: avatar! }}
-              style={styles.avatar}
-              onError={() => setAvatarFailed(true)}
+              source={require("../../assets/images/va-logo.png")}
+              style={{ width: 30, height: 30 }}
+              tintColor={colors.text}
+              resizeMode="contain"
             />
-          ) : (
-            <View style={styles.avatarFallback}>
-              <Text style={styles.avatarInitial}>
-                {userName.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-          )}
+            <T style={{ fontFamily: fonts.serifMedium, fontSize: 19, lineHeight: 24 }}>
+              Fifth Avenue
+            </T>
+          </Tap>
 
-          <View style={styles.profileNameContainer}>
-            <Text style={styles.profileName} numberOfLines={1}>
-              {userName}
-            </Text>
-
-            <Text style={styles.profileRole} numberOfLines={1}>
-              {typeof user?.title === "string"
-                ? user.title
-                : "Client"}
-            </Text>
-          </View>
-
-          <Ionicons
-            name={menuVisible ? "chevron-up" : "chevron-down"}
-            size={16}
-            color="#6F6A5D"
-          />
-        </Pressable>
+          <Tap
+            accessibilityRole="button"
+            accessibilityLabel={`Account menu for ${userName}`}
+            accessibilityState={{ expanded: menuVisible }}
+            onPress={() => setMenuVisible((previous) => !previous)}
+            style={[styles.avatarButton, { borderColor: colors.gold }]}
+          >
+            {showAvatar ? (
+              <Image
+                source={{ uri: avatar! }}
+                style={styles.avatar}
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              <View style={[styles.avatar, styles.avatarFallback, { backgroundColor: colors.accent }]}>
+                <T v="label" color={colors.onAccent}>
+                  {userName.charAt(0).toUpperCase()}
+                </T>
+              </View>
+            )}
+          </Tap>
+        </Glass>
       </View>
 
-      {/* PROFILE DROPDOWN */}
-      {menuVisible && (
+      {menuVisible ? (
         <>
-          {/* Outside tap closes dropdown */}
           <Pressable
+            accessibilityLabel="Close menu"
             style={styles.menuBackdrop}
             onPress={() => setMenuVisible(false)}
           />
-
-          <View style={styles.dropdownMenu}>
-
-            {/* PROFILE */}
-            <Pressable
-              style={styles.dropdownItem}
-              onPress={openSettings}
-            >
-              <Ionicons
-                name="person-outline"
-                size={19}
-                color="#263B68"
-              />
-
-              <Text style={styles.dropdownText}>
-                Profile
-              </Text>
-            </Pressable>
-
-            <View style={styles.menuDivider} />
-
-            {/* SIGN OUT */}
-            <Pressable
-              style={styles.dropdownItem}
-              onPress={handleSignOut}
-            >
-              <Ionicons
-                name="log-out-outline"
-                size={19}
-                color="#B42318"
-              />
-
-              <Text style={styles.signOutText}>
-                Sign out
-              </Text>
-            </Pressable>
-
-          </View>
+          <Animated.View
+            entering={FadeInUp.duration(220).easing(Easing.out(Easing.cubic))}
+            exiting={FadeOut.duration(120)}
+            style={[styles.menu, { top: insets.top + 74 }]}
+          >
+            <Glass dark={isDark} radius={radius.lg} strength={0.9} contentStyle={{ paddingVertical: 6 }}>
+              <View style={styles.menuWho}>
+                <T v="subhead" numberOfLines={1}>
+                  {userName}
+                </T>
+                <T v="caption" tone="faint" numberOfLines={1}>
+                  {typeof user?.title === "string" && user.title
+                    ? user.title
+                    : user?.clientName || user?.email || ""}
+                </T>
+              </View>
+              <Hairline />
+              {menuItems.map((item) => (
+                <Tap
+                  key={item.label}
+                  accessibilityRole="menuitem"
+                  onPress={item.onPress}
+                  scaleTo={0.98}
+                  style={styles.menuItem}
+                >
+                  <Ionicons
+                    name={item.icon}
+                    size={18}
+                    color={item.danger ? colors.danger : colors.text2}
+                  />
+                  <T v="bodyStrong" color={item.danger ? colors.danger : colors.text}>
+                    {item.label}
+                  </T>
+                </Tap>
+              ))}
+            </Glass>
+          </Animated.View>
         </>
-      )}
+      ) : null}
     </View>
   );
 }
 
-// ---------------------------------------------
-// CUSTOM BOTTOM TAB BAR
-// ---------------------------------------------
+// ---------------------------------------------------------------------------
+// Tab bar: a glass capsule with a lens that slides to the chosen tab
+// ---------------------------------------------------------------------------
 
-function CustomTabBar({
-  state,
-  descriptors,
-}: BottomTabBarProps) {
-  const insets = useSafeAreaInsets();
+const TAB_ICONS: Record<string, { on: IconName; off: IconName }> = {
+  overview: { on: "home", off: "home-outline" },
+  campaigns: { on: "megaphone", off: "megaphone-outline" },
+  insights: { on: "analytics", off: "analytics-outline" },
+  assets: { on: "play-circle", off: "play-circle-outline" },
+  billing: { on: "wallet", off: "wallet-outline" },
+};
 
-  // Hide Settings from bottom navigation.
-  const visibleRoutes = state.routes.filter(
-    (route) => route.name !== "settings"
+function TabItem({
+  label,
+  routeName,
+  focused,
+  onPress,
+}: {
+  label: string;
+  routeName: string;
+  focused: boolean;
+  onPress: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const lift = useSharedValue(focused ? 1 : 0);
+
+  useEffect(() => {
+    lift.value = withSpring(focused ? 1 : 0, springs.snappy);
+  }, [focused, lift]);
+
+  const iconStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -lift.value * 1.5 }, { scale: 1 + lift.value * 0.1 }],
+  }));
+
+  const icons = TAB_ICONS[routeName] ?? { on: "ellipse", off: "ellipse-outline" };
+  const color = focused ? colors.accent : colors.text2;
+
+  return (
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: focused }}
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={styles.tabItem}
+    >
+      <Animated.View style={iconStyle}>
+        <Ionicons name={focused ? icons.on : icons.off} size={21} color={color} />
+      </Animated.View>
+      <T
+        numberOfLines={1}
+        color={color}
+        style={{
+          fontFamily: focused ? fonts.sansSemi : fonts.sansMedium,
+          fontSize: 9.5,
+          lineHeight: 13,
+          letterSpacing: -0.1,
+        }}
+      >
+        {label}
+      </T>
+    </Pressable>
   );
+}
 
-  const focusedRouteKey = state.routes[state.index]?.key;
+function GlassTabBar({ state, descriptors }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
+  const { isDark } = useAppTheme();
+  const [barWidth, setBarWidth] = useState(0);
+
+  // Settings is reached from the account menu, not the tab bar.
+  const visibleRoutes = state.routes.filter((route) => route.name !== "settings");
+  const focusedKey = state.routes[state.index]?.key;
+  const focusedIndex = visibleRoutes.findIndex((route) => route.key === focusedKey);
+
+  const slot = barWidth > 0 ? (barWidth - 12) / visibleRoutes.length : 0;
+  const x = useSharedValue(0);
+  const shown = useSharedValue(focusedIndex >= 0 ? 1 : 0);
+  const stretch = useSharedValue(1);
+
+  useEffect(() => {
+    if (focusedIndex >= 0) {
+      x.value = withSpring(focusedIndex * slot, { damping: 17, stiffness: 190, mass: 0.9 });
+      // The lens stretches as it travels and settles back, like a drop of liquid.
+      stretch.value = withSequence(
+        withTiming(1.22, { duration: 130, easing: Easing.out(Easing.quad) }),
+        withSpring(1, { damping: 11, stiffness: 190 })
+      );
+    }
+    shown.value = withSpring(focusedIndex >= 0 ? 1 : 0, springs.snappy);
+  }, [focusedIndex, slot, x, shown, stretch]);
+
+  const lens = useAnimatedStyle(() => ({
+    opacity: shown.value,
+    transform: [
+      { translateX: x.value },
+      { scaleX: stretch.value },
+      { scaleY: 2 - stretch.value > 0.9 ? 2 - stretch.value : 0.9 },
+    ],
+  }));
 
   return (
     <View
-      style={[
-        styles.tabBarContainer,
-        {
-          paddingBottom: Math.max(insets.bottom, 8),
-        },
-      ]}
+      pointerEvents="box-none"
+      style={[styles.tabBarWrap, { paddingBottom: Math.max(insets.bottom, 12) }]}
     >
-      <View style={styles.tabBar}>
-        {visibleRoutes.map((route) => {
-          const { options } = descriptors[route.key];
-
-          const label = options.title || route.name;
-          const isFocused = focusedRouteKey === route.key;
-
-          const color = isFocused ? "#FFFFFF" : "#263247";
-          const iconSize = isFocused ? 21 : 20;
-
-          const handlePress = () => {
-            if (isFocused) return;
-
-            router.navigate(
-              (`/(tabs)/${route.name}`) as Href
+      <View
+        style={styles.tabBarSize}
+        onLayout={(event) => setBarWidth(event.nativeEvent.layout.width)}
+      >
+        <Glass dark={isDark} radius={34} contentStyle={styles.tabBar}>
+          {slot > 0 ? (
+            <Animated.View
+              style={[
+                styles.lens,
+                {
+                  width: slot,
+                  backgroundColor: isDark ? "rgba(255,255,255,0.13)" : "rgba(27,42,92,0.09)",
+                  borderColor: isDark ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,1)",
+                  shadowOpacity: isDark ? 0.4 : 0.06,
+                },
+                lens,
+              ]}
+            />
+          ) : null}
+          {visibleRoutes.map((route) => {
+            const { options } = descriptors[route.key];
+            const label = options.title || route.name;
+            const focused = focusedKey === route.key;
+            return (
+              <TabItem
+                key={route.key}
+                label={label}
+                routeName={route.name}
+                focused={focused}
+                onPress={() => {
+                  if (focused) return;
+                  tick();
+                  router.navigate(`/(tabs)/${route.name}` as Href);
+                }}
+              />
             );
-          };
-
-          return (
-            <Pressable
-              key={route.key}
-              accessibilityRole="button"
-              accessibilityState={{ selected: isFocused }}
-              accessibilityLabel={
-                options.tabBarAccessibilityLabel || label
-              }
-              testID={options.tabBarButtonTestID}
-              onPress={handlePress}
-              style={styles.tabItem}
-            >
-              <View
-                style={[
-                  styles.tabPill,
-                  isFocused && styles.activeTabPill,
-                ]}
-              >
-                {options.tabBarIcon?.({
-                  focused: isFocused,
-                  color,
-                  size: iconSize,
-                })}
-
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.tabLabel,
-                    isFocused
-                      ? styles.activeTabLabel
-                      : styles.inactiveTabLabel,
-                  ]}
-                >
-                  {label}
-                </Text>
-              </View>
-            </Pressable>
-          );
-        })}
+          })}
+        </Glass>
       </View>
     </View>
   );
 }
 
-// ---------------------------------------------
-// TAB LAYOUT
-// ---------------------------------------------
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
 
 export default function TabLayout() {
+  const { isAuthenticated } = useAuth();
+  const { colors, isDark } = useAppTheme();
+
+  if (!isAuthenticated) {
+    return <Redirect href="/" />;
+  }
+
   return (
-    <Tabs
-      tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{
-        header: () => <AppHeader />,
-        headerShown: true,
-      }}
-    >
-
-      {/* OVERVIEW */}
-      <Tabs.Screen
-        name="overview"
-        options={{
-          title: "Overview",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons
-              name="home-outline"
-              size={size}
-              color={color}
-            />
-          ),
-        }}
-      />
-
-      {/* CAMPAIGNS */}
-      <Tabs.Screen
-        name="campaigns"
-        options={{
-          title: "Campaigns",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons
-              name="create-outline"
-              size={size}
-              color={color}
-            />
-          ),
-        }}
-      />
-
-      {/* INSIGHTS */}
-      <Tabs.Screen
-        name="insights"
-        options={{
-          title: "Insights",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons
-              name="analytics-outline"
-              size={size}
-              color={color}
-            />
-          ),
-        }}
-      />
-
-      {/* ASSETS */}
-      <Tabs.Screen
-        name="assets"
-        options={{
-          title: "Assets",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons
-              name="briefcase-outline"
-              size={size}
-              color={color}
-            />
-          ),
-        }}
-      />
-
-      {/* BILLING */}
-      <Tabs.Screen
-        name="billing"
-        options={{
-          title: "Billing",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons
-              name="wallet-outline"
-              size={size}
-              color={color}
-            />
-          ),
-        }}
-      />
-
-      {/* SETTINGS */}
-      <Tabs.Screen
-        name="settings"
-        options={{
+    <Animated.View entering={FadeIn.duration(350)} style={{ flex: 1, backgroundColor: colors.background }}>
+      <StatusBar style={isDark ? "light" : "dark"} />
+      <Tabs
+        tabBar={(props) => <GlassTabBar {...props} />}
+        screenOptions={{
+          header: () => <AppHeader />,
           headerShown: true,
-          title: "Settings",
-          tabBarStyle: { display: "none" },
+          headerTransparent: true,
+          animation: "fade",
+          sceneStyle: { backgroundColor: colors.background },
         }}
-      />
-
-    </Tabs>
+      >
+        <Tabs.Screen name="overview" options={{ title: "Overview" }} />
+        <Tabs.Screen name="campaigns" options={{ title: "Campaigns" }} />
+        <Tabs.Screen name="insights" options={{ title: "Insights" }} />
+        <Tabs.Screen name="assets" options={{ title: "Assets" }} />
+        <Tabs.Screen name="billing" options={{ title: "Billing" }} />
+        <Tabs.Screen name="settings" options={{ title: "Settings" }} />
+      </Tabs>
+    </Animated.View>
   );
 }
 
-// ---------------------------------------------
-// STYLES
-// ---------------------------------------------
-
 const styles = StyleSheet.create({
-
-  // HEADER
-  headerWrapper: {
-    backgroundColor: "#F8F7F4",
-    paddingHorizontal: 18,
-    paddingBottom: 12,
-    zIndex: 100,
-    elevation: 5,
-  },
-
-  headerContent: {
-    minHeight: 48,
+  headerWrap: { paddingHorizontal: 12, alignItems: "center" },
+  headerGlass: { width: "100%", maxWidth: 560 },
+  header: {
+    height: 58,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingLeft: 16,
+    paddingRight: 9,
   },
-
-  brandContainer: {
-    flex: 1,
-  },
-
-  brandText: {
-    color: "#17243A",
-    fontSize: 13,
-    fontWeight: "600",
-    letterSpacing: 3,
-  },
-
-  brandAccent: {
-    color: "#42577F",
-  },
-
-  // PROFILE BUTTON
-  profileButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E9E6DF",
-    borderRadius: 28,
-    paddingVertical: 5,
-    paddingHorizontal: 7,
-    maxWidth: 160,
-  },
-
-  avatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-  },
-
-  avatarFallback: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: "#172F68",
+  brand: { flexDirection: "row", alignItems: "center", gap: 6 },
+  avatarButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
   },
-
-  avatarInitial: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "700",
-  },
-
-  profileNameContainer: {
-    flexShrink: 1,
-  },
-
-  profileName: {
-    color: "#24221E",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  profileRole: {
-    color: "#777264",
-    fontSize: 10,
-    marginTop: 1,
-  },
-
-  // DROPDOWN BACKDROP
+  avatar: { width: 34, height: 34, borderRadius: 17 },
+  avatarFallback: { alignItems: "center", justifyContent: "center" },
   menuBackdrop: {
     position: "absolute",
     top: 0,
     left: -1000,
     right: -1000,
-    bottom: -1000,
-    zIndex: 1,
+    height: 3000,
   },
-
-  // DROPDOWN
-  dropdownMenu: {
-    position: "absolute",
-    top: "100%",
-    right: 18,
-    marginTop: 12,
-    width: 205,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 15,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: "#EAE7E0",
-    elevation: 12,
-    shadowColor: "#000000",
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    zIndex: 2,
-  },
-
-  dropdownItem: {
-    minHeight: 47,
+  menu: { position: "absolute", right: 14, width: 236 },
+  menuWho: { paddingHorizontal: 16, paddingVertical: 10 },
+  menuItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 13,
+    gap: 12,
     paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-
-  dropdownText: {
-    color: "#263247",
-    fontSize: 14,
-    fontWeight: "500",
+  tabBarWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 14,
+    alignItems: "center",
   },
-
-  signOutText: {
-    color: "#B42318",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-
-  menuDivider: {
-    height: 1,
-    backgroundColor: "#F0EEE9",
-    marginHorizontal: 13,
-  },
-
-  // BOTTOM TAB BAR
-  tabBarContainer: {
-    backgroundColor: "#FFFFFF",
-    paddingTop: 7,
-    paddingHorizontal: 7,
-    borderTopWidth: 0,
-    elevation: 12,
-    shadowColor: "#000000",
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-  },
-
+  tabBarSize: { width: "100%", maxWidth: 460 },
   tabBar: {
+    height: 68,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    minHeight: 54,
+    paddingHorizontal: 6,
   },
-
-  tabItem: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  tabPill: {
-    minWidth: 55,
-    height: 49,
-    paddingHorizontal: 5,
+  lens: {
+    position: "absolute",
+    left: 6,
+    top: 6,
+    bottom: 6,
     borderRadius: 28,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 2,
+    borderWidth: 1,
+    shadowColor: "#000000",
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
   },
-
-  activeTabPill: {
-    backgroundColor: "#172F68",
-    minWidth: 70,
-    paddingHorizontal: 8,
-    borderRadius: 30,
-  },
-
-  tabLabel: {
-    fontSize: 10,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-
-  activeTabLabel: {
-    color: "#FFFFFF",
-  },
-
-  inactiveTabLabel: {
-    color: "#263247",
-  },
-
+  tabItem: { flex: 1, height: "100%", alignItems: "center", justifyContent: "center", gap: 3 },
 });

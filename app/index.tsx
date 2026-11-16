@@ -1,301 +1,183 @@
-import React, { useEffect, useRef } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  Image,
-  Animated,
-  StatusBar,
-  Dimensions,
-} from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import Svg, { Path } from "react-native-svg";
-import { router } from "expo-router";
+import React, { useEffect } from "react";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeInDown,
+  FadeInUp,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
+import { Ionicons } from "@expo/vector-icons";
+import { StatusBar } from "expo-status-bar";
+import { Redirect, router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 import { useAuth } from "../src/context/AuthContext";
+import { Aurora, Seal, TAGLINE } from "../src/ui/brand";
+import { Tap, thud } from "../src/ui/primitives";
+import { fonts, midnight, radius } from "../src/ui/theme";
 
-const { width, height } = Dimensions.get("window");
+const ease = Easing.out(Easing.cubic);
 
-export default function SplashScreen() {
+export default function Landing() {
   const { isAuthenticated } = useAuth();
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const reduced = useReducedMotion();
 
-  const logoOpacity = useRef(new Animated.Value(0)).current;
-  const logoScale = useRef(new Animated.Value(0.75)).current;
-  const contentOpacity = useRef(new Animated.Value(0)).current;
-  const progress = useRef(new Animated.Value(0)).current;
-  const waveAnimation = useRef(new Animated.Value(0)).current;
-
+  // The halo behind the seal breathes slowly.
+  const breath = useSharedValue(0);
   useEffect(() => {
-    Animated.sequence([
-      Animated.parallel([
-        Animated.timing(logoOpacity, {
-          toValue: 1,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-        Animated.spring(logoScale, {
-          toValue: 1,
-          tension: 45,
-          friction: 7,
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.timing(contentOpacity, {
-        toValue: 1,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    if (reduced) return;
+    breath.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 3200, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: 3200, easing: Easing.inOut(Easing.sin) })
+      ),
+      -1,
+      false
+    );
+  }, [reduced, breath]);
+  const halo = useAnimatedStyle(() => ({
+    opacity: 0.15 + breath.value * 0.5,
+    transform: [{ scale: 1 + breath.value * 0.1 }],
+  }));
 
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(waveAnimation, {
-          toValue: 1,
-          duration: 2500,
-          useNativeDriver: true,
-        }),
-        Animated.timing(waveAnimation, {
-          toValue: 0,
-          duration: 2500,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
+  if (isAuthenticated) {
+    return <Redirect href="/(tabs)/overview" />;
+  }
 
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: 2500,
-      useNativeDriver: false,
-    }).start();
-
-    const timer = setTimeout(() => {
-      router.replace(
-        isAuthenticated ? "/(tabs)/overview" : "/(auth)/login"
-      );
-    }, 3000);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  const progressWidth = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 160],
-  });
-
-  const waveTranslate = waveAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -12],
-  });
+  const sealSize = Math.min(190, Math.round(width * 0.46));
 
   return (
-    <View style={styles.container}>
-      <StatusBar hidden />
+    <View style={styles.root}>
+      <StatusBar style="light" />
+      <Aurora width={width} height={height} />
+      <View pointerEvents="none" style={styles.veil} />
 
-      <LinearGradient
-        colors={["#F4F3FF", "#FFFFFF", "#F3F0FF"]}
-        locations={[0, 0.55, 1]}
-        style={StyleSheet.absoluteFill}
-      />
+      <View style={[styles.page, { paddingTop: insets.top + 22, paddingBottom: Math.max(insets.bottom, 20) + 14 }]}>
+        <Animated.Text entering={FadeIn.duration(900)} style={styles.wordmark}>
+          Fifth Avenue
+        </Animated.Text>
 
-      {/* Top decorative curves */}
-      <View style={styles.topDecoration}>
-        <Svg
-          width={width}
-          height={height * 0.27}
-          viewBox="0 0 390 240"
-          preserveAspectRatio="xMidYMin slice"
-        >
-          <Path
-            d="M0 0 H390 V25 C270 40 180 95 95 155 C55 183 25 190 0 200 Z"
-            fill="#E7E5FF"
-            opacity={0.45}
-          />
-          <Path
-            d="M0 0 H300 C225 45 190 115 110 145 C65 165 25 180 0 190 Z"
-            fill="#DCD9FF"
-            opacity={0.35}
-          />
-        </Svg>
-      </View>
+        <View style={styles.middle}>
+          <Animated.View entering={FadeIn.delay(200).duration(1200)} style={styles.sealWrap}>
+            <Animated.View
+              style={[
+                styles.halo,
+                { width: sealSize * 1.28, height: sealSize * 1.28, borderRadius: sealSize },
+                halo,
+              ]}
+            />
+            <Seal size={sealSize} />
+          </Animated.View>
 
-      {/* Main branding */}
-      <View style={styles.brandContent}>
-        <Animated.View
-          style={{
-            opacity: logoOpacity,
-            transform: [{ scale: logoScale }],
-          }}
-        >
-          <Image
-            source={require("../assets/images/va-logo.png")}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-        </Animated.View>
+          <Animated.Text
+            entering={FadeInDown.delay(550).duration(800).easing(ease)}
+            style={styles.headline}
+            accessibilityRole="header"
+          >
+            Every campaign,{"\n"}as it happens.
+          </Animated.Text>
 
-        <Animated.View
-          style={[
-            styles.textContent,
-            { opacity: contentOpacity },
-          ]}
-        >
-          <Text style={styles.brandName}>FIFTH AVENUE</Text>
+          <Animated.View entering={FadeIn.delay(1000).duration(700)} style={styles.rule} />
 
-          <View style={styles.taglineContainer}>
-            <View style={styles.line} />
-            <Text style={styles.tagline}>
-              Creative. Connected. Influential.
-            </Text>
-            <View style={styles.line} />
-          </View>
-        </Animated.View>
-      </View>
-
-      {/* Bottom animated waves */}
-      <Animated.View
-        style={[
-          styles.bottomWaves,
-          { transform: [{ translateY: waveTranslate }] },
-        ]}
-      >
-        <Svg
-          width={width}
-          height={height * 0.43}
-          viewBox="0 0 390 370"
-          preserveAspectRatio="xMidYMax slice"
-        >
-          <Path
-            d="M0 130 C75 65 115 85 180 120 C245 160 305 55 390 35 L390 370 H0 Z"
-            fill="#DAD9FF"
-            opacity={0.55}
-          />
-
-          <Path
-            d="M0 180 C90 120 130 165 190 180 C265 200 320 85 390 85 L390 370 H0 Z"
-            fill="#AEB7F2"
-            opacity={0.65}
-          />
-
-          <Path
-            d="M0 235 C85 160 130 195 190 205 C260 220 315 115 390 110 L390 370 H0 Z"
-            fill="#666ED1"
-            opacity={0.85}
-          />
-
-          <Path
-            d="M0 290 C100 205 145 250 210 245 C280 240 330 165 390 145 L390 370 H0 Z"
-            fill="#263A88"
-          />
-
-          <Path
-            d="M0 335 C90 265 145 285 220 275 C290 265 340 220 390 205 L390 370 H0 Z"
-            fill="#111D56"
-          />
-        </Svg>
-      </Animated.View>
-
-      {/* Loading indicator */}
-      <View style={styles.loadingContainer}>
-        <View style={styles.progressBackground}>
-          <Animated.View
-            style={[
-              styles.progressFill,
-              { width: progressWidth },
-            ]}
-          />
+          <Animated.Text entering={FadeIn.delay(1150).duration(800)} style={styles.tagline}>
+            {TAGLINE.join(". ")}.
+          </Animated.Text>
         </View>
+
+        <Animated.View entering={FadeInUp.delay(1400).duration(700).easing(ease)}>
+          <Tap
+            accessibilityRole="button"
+            accessibilityLabel="Sign in"
+            haptic={false}
+            onPress={() => {
+              thud();
+              router.push("/(auth)/login");
+            }}
+            style={styles.cta}
+          >
+            <Text style={styles.ctaText}>Sign in</Text>
+            <View style={styles.ctaArrow}>
+              <Ionicons name="arrow-forward" size={18} color={midnight.text} />
+            </View>
+          </Tap>
+          <Text style={styles.footnote}>
+            No account yet? Your Fifth Avenue account manager can set one up.
+          </Text>
+        </Animated.View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  root: { flex: 1, backgroundColor: midnight.top },
+  veil: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "rgba(0,0,28,0.42)" },
+  page: {
     flex: 1,
-    backgroundColor: "#F7F6FF",
-    overflow: "hidden",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  topDecoration: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-  },
-
-  brandContent: {
+    paddingHorizontal: 26,
+    maxWidth: 560,
     width: "100%",
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: -height * 0.02,
-    zIndex: 2,
+    alignSelf: "center",
   },
-
-  logo: {
-    width: 340,
-    height: 230,
-  },
-
-  textContent: {
-    alignItems: "center",
-    marginTop: -5,
-  },
-
-  brandName: {
-    fontSize: 27,
-    fontWeight: "700",
-    color: "#101B50",
-    letterSpacing: 7,
+  wordmark: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 20,
+    letterSpacing: 0.3,
+    color: midnight.text,
     textAlign: "center",
   },
-
-  taglineContainer: {
+  middle: { flex: 1, alignItems: "center", justifyContent: "center" },
+  sealWrap: { alignItems: "center", justifyContent: "center", marginBottom: 34 },
+  halo: { position: "absolute", borderWidth: 1, borderColor: "rgba(244,194,107,0.5)" },
+  headline: {
+    fontFamily: fonts.serif,
+    fontSize: 44,
+    lineHeight: 50,
+    letterSpacing: -1.1,
+    color: midnight.text,
+    textAlign: "center",
+  },
+  rule: { width: 44, height: 1.5, backgroundColor: midnight.lamp, marginTop: 22, marginBottom: 16 },
+  tagline: {
+    fontFamily: fonts.serifItalic,
+    fontSize: 18,
+    lineHeight: 24,
+    color: midnight.muted,
+    textAlign: "center",
+  },
+  cta: {
+    height: 62,
+    borderRadius: radius.pill,
+    backgroundColor: midnight.text,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginTop: 22,
-    gap: 12,
+    justifyContent: "space-between",
+    paddingLeft: 28,
+    paddingRight: 9,
   },
-
-  tagline: {
-    fontSize: 13,
-    color: "#626D94",
-    letterSpacing: 0.4,
-    fontWeight: "500",
-  },
-
-  line: {
-    width: 22,
-    height: 1,
-    backgroundColor: "#A3A8D6",
-  },
-
-  bottomWaves: {
-    position: "absolute",
-    bottom: -2,
-    left: 0,
-    width: "100%",
-    zIndex: 1,
-  },
-
-  loadingContainer: {
-    position: "absolute",
-    bottom: height * 0.12,
+  ctaText: { fontFamily: fonts.sansSemi, fontSize: 16, color: "#0A0F3A" },
+  ctaArrow: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#0A0F3A",
     alignItems: "center",
-    zIndex: 3,
+    justifyContent: "center",
   },
-
-  progressBackground: {
-    width: 160,
-    height: 5,
-    backgroundColor: "rgba(255,255,255,0.45)",
-    borderRadius: 10,
-    overflow: "hidden",
-  },
-
-  progressFill: {
-    height: 5,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
+  footnote: {
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 17,
+    color: midnight.faint,
+    textAlign: "center",
+    marginTop: 14,
   },
 });

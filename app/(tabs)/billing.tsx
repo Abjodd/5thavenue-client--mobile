@@ -1,22 +1,38 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  ActivityIndicator,
-  TouchableOpacity,
-} from "react-native";
+import { StyleSheet, View } from "react-native";
+import Animated, {
+  Easing,
+  FadeIn,
+  LinearTransition,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 
-import {
-  getPortalCampaigns,
-  type PortalCampaign,
-} from "../../src/lib/api";
-
+import { getPortalCampaigns, type PortalCampaign } from "../../src/lib/api";
 import { useAuth } from "../../src/context/AuthContext";
+import { useAppTheme } from "../../src/context/ThemeContext";
+import {
+  Button,
+  CountUp,
+  EmptyState,
+  Hairline,
+  Pill,
+  Reveal,
+  ScreenScroll,
+  ScreenSkeleton,
+  ScreenTitle,
+  SectionTitle,
+  T,
+  Tap,
+  type Tone,
+} from "../../src/ui/primitives";
+import { cardShadow, midnight, radius, space, springs } from "../../src/ui/theme";
 
-// ---------------------------------------------
 // TYPES
 // ---------------------------------------------
 
@@ -57,28 +73,6 @@ type CampaignBill = {
     date: string | null;
     tone: "green" | "amber" | "muted";
   };
-};
-
-// ---------------------------------------------
-// COLORS
-// ---------------------------------------------
-
-const COLORS = {
-  background: "#F8F7F4",
-  white: "#FFFFFF",
-  ink: "#17243A",
-  sub: "#65738A",
-  muted: "#929BA9",
-  border: "#E9E8E4",
-  well: "#F1F1EE",
-  blue: "#4368A8",
-  green: "#16845B",
-  greenBg: "#E8F5EE",
-  amber: "#B7791F",
-  amberBg: "#FFF5DF",
-  red: "#D34D4D",
-  redBg: "#FDECEC",
-  teal: "#269A91",
 };
 
 const GST_RATE = 0.18;
@@ -248,56 +242,54 @@ function calculateCampaignBill(
 }
 
 // ---------------------------------------------
-// SMALL COMPONENTS
-// ---------------------------------------------
 
-function MetricCard({
-  label,
-  value,
-  subtitle,
-  color,
+// ---------------------------------------------------------------------------
+// Pieces
+// ---------------------------------------------------------------------------
+
+function BarPart({ share, color, delay }: { share: number; color: string; delay: number }) {
+  const width = useSharedValue(0);
+  const target = Math.max(0, Math.min(100, share));
+  useEffect(() => {
+    width.value = withDelay(delay, withTiming(target, { duration: 900, easing: Easing.out(Easing.cubic) }));
+  }, [target, delay, width]);
+  const style = useAnimatedStyle(() => ({ width: `${width.value}%` }));
+  return <Animated.View style={[{ height: "100%", backgroundColor: color }, style]} />;
+}
+
+/** A track split into coloured parts that grow in from the left. */
+function SplitBar({
+  parts,
+  track,
+  height = 10,
 }: {
-  label: string;
-  value: string;
-  subtitle: string;
-  color?: string;
+  parts: { share: number; color: string }[];
+  track: string;
+  height?: number;
 }) {
   return (
-    <View style={styles.metricCard}>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={[styles.metricValue, color ? { color } : null]}>
-        {value}
-      </Text>
-      <Text style={styles.metricSubtitle}>{subtitle}</Text>
+    <View style={{ height, borderRadius: height, backgroundColor: track, overflow: "hidden", flexDirection: "row" }}>
+      {parts
+        .filter((part) => part.share > 0)
+        .map((part, index) => (
+          <BarPart key={index} share={part.share} color={part.color} delay={200 + index * 180} />
+        ))}
     </View>
   );
 }
 
-function StatusBadge({
-  status,
-}: {
-  status: CampaignBill["status"];
-}) {
-  const background =
-    status.tone === "green"
-      ? COLORS.greenBg
-      : status.tone === "amber"
-      ? COLORS.amberBg
-      : COLORS.well;
-
-  const color =
-    status.tone === "green"
-      ? COLORS.green
-      : status.tone === "amber"
-      ? COLORS.amber
-      : COLORS.sub;
-
+function Legend({ color, label, hollow }: { color: string; label: string; hollow?: boolean }) {
   return (
-    <View style={[styles.statusBadge, { backgroundColor: background }]}>
-      <View style={[styles.statusDot, { backgroundColor: color }]} />
-      <Text style={[styles.statusText, { color }]}>
-        {status.label}
-      </Text>
+    <View style={styles.legend}>
+      <View
+        style={[
+          styles.legendDot,
+          hollow ? { borderWidth: 1, borderColor: color } : { backgroundColor: color },
+        ]}
+      />
+      <T v="caption" tone="muted">
+        {label}
+      </T>
     </View>
   );
 }
@@ -319,257 +311,195 @@ function BillingRow({
   strong?: boolean;
   color?: string;
 }) {
+  const { colors } = useAppTheme();
   return (
     <View style={styles.billingRow}>
-      <View style={styles.billingRowLeft}>
-        <Text
-          style={[
-            styles.billingRowLabel,
-            muted && { color: COLORS.sub },
-            strong && { fontWeight: "800" },
-            color ? { color } : null,
-          ]}
+      <View style={{ flex: 1 }}>
+        <T
+          v={strong ? "subhead" : "bodyStrong"}
+          color={color ?? (muted ? colors.text2 : colors.text)}
+          numberOfLines={2}
         >
           {label}
-        </Text>
-
+        </T>
         {sub ? (
-          <Text style={styles.billingRowSub}>{sub}</Text>
+          <T v="caption" tone="faint">
+            {sub}
+          </T>
         ) : null}
       </View>
-
-      <View style={styles.billingRowRight}>
-        {share != null ? (
-          <Text style={styles.shareText}>
-            {`${Math.round(share)}%`}
-          </Text>
-        ) : null}
-
-        <Text
-          style={[
-            styles.billingAmount,
-            strong && styles.billingAmountStrong,
-            color ? { color } : null,
-          ]}
-        >
-          {formatINR(amount)}
-        </Text>
-      </View>
+      {share != null ? (
+        <T v="caption" tone="faint">{`${Math.round(share)}%`}</T>
+      ) : null}
+      <T
+        v={strong ? "figureSm" : "bodyStrong"}
+        color={color ?? colors.text}
+        style={{ minWidth: 84, textAlign: "right" }}
+      >
+        {formatINR(amount)}
+      </T>
     </View>
   );
 }
 
-// ---------------------------------------------
-// ALLOCATION BAR
-// ---------------------------------------------
-
-function AllocationBar({
-  creatorTotal,
-  fee,
-  base,
-  listed,
-  pending,
-}: {
-  creatorTotal: number;
-  fee: number;
-  base: number;
-  listed: number;
-  pending: boolean;
-}) {
-  const scale = Math.max(base, listed);
-
-  if (scale <= 0) return null;
-
-  const creatorWidth = (creatorTotal / scale) * 100;
-  const feeWidth = (fee / scale) * 100;
-  const over = !pending && listed > base;
-
+function BlockLabel({ title, note }: { title: string; note?: string }) {
   return (
-    <View style={styles.allocationContainer}>
-      <View style={styles.allocationTrack}>
-        {creatorTotal > 0 ? (
-          <View
-            style={[
-              styles.creatorBar,
-              { width: `${creatorWidth}%` },
-            ]}
-          />
-        ) : null}
-
-        {fee > 0 ? (
-          <View
-            style={[
-              styles.feeBar,
-              { width: `${feeWidth}%` },
-            ]}
-          />
-        ) : null}
-      </View>
-
-      <View style={styles.legendContainer}>
-        {creatorTotal > 0 ? (
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: COLORS.blue }]} />
-            <Text style={styles.legendText}>
-              Creators {formatINR(creatorTotal)}
-            </Text>
-          </View>
-        ) : null}
-
-        {fee > 0 ? (
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: COLORS.teal }]} />
-            <Text style={styles.legendText}>
-              Agency fee {formatINR(fee)}
-            </Text>
-          </View>
-        ) : null}
-
-        {!pending && listed < base ? (
-          <View style={styles.legendItem}>
-            <View
-              style={[
-                styles.legendDot,
-                {
-                  backgroundColor: COLORS.white,
-                  borderWidth: 1,
-                  borderColor: COLORS.muted,
-                },
-              ]}
-            />
-            <Text style={styles.legendText}>
-              Unallocated {formatINR(base - listed)}
-            </Text>
-          </View>
-        ) : null}
-
-        {over ? (
-          <Text style={styles.overBudgetText}>
-            Over budget by {formatINR(listed - base)}
-          </Text>
-        ) : null}
-      </View>
+    <View style={[styles.rowBetween, { marginTop: space.lg, marginBottom: 2 }]}>
+      <T v="label" tone="muted">
+        {title}
+      </T>
+      {note ? (
+        <T v="caption" tone="faint">
+          {note}
+        </T>
+      ) : null}
     </View>
   );
 }
 
-// ---------------------------------------------
-// CAMPAIGN BILL
-// ---------------------------------------------
+const STATUS_TONE: Record<CampaignBill["status"]["tone"], Tone> = {
+  green: "success",
+  amber: "warning",
+  muted: "neutral",
+};
+
+// ---------------------------------------------------------------------------
+// One campaign's statement
+// ---------------------------------------------------------------------------
 
 function CampaignBillCard({
   campaign,
+  defaultOpen,
 }: {
   campaign: CampaignBill;
+  defaultOpen: boolean;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const { colors } = useAppTheme();
+  const [expanded, setExpanded] = useState(defaultOpen);
+
+  const turn = useSharedValue(defaultOpen ? 1 : 0);
+  useEffect(() => {
+    turn.value = withSpring(expanded ? 1 : 0, springs.snappy);
+  }, [expanded, turn]);
+  const chevron = useAnimatedStyle(() => ({ transform: [{ rotate: `${turn.value * 180}deg` }] }));
 
   const unpriced = campaign.rosterCount - campaign.itemised;
   const feeLine = campaign.fee > 0;
+  const showDiff = !campaign.pending && Math.abs(campaign.diff) >= 1;
+  const feeShare = campaign.fee > 0 ? (campaign.fee / campaign.base) * 100 : null;
 
-  const showDiff =
-    !campaign.pending && Math.abs(campaign.diff) >= 1;
-
-  const feeShare = campaign.fee > 0
-    ? (campaign.fee / campaign.base) * 100
-    : null;
+  const scale = Math.max(campaign.base, campaign.listed);
+  const over = !campaign.pending && campaign.listed > campaign.base;
 
   return (
-    <View style={styles.campaignCard}>
-      {/* CAMPAIGN HEADER */}
-
-      <TouchableOpacity
-        activeOpacity={0.85}
+    <Animated.View
+      layout={LinearTransition.duration(260)}
+      style={[
+        styles.bill,
+        cardShadow(colors),
+        { backgroundColor: colors.surface, borderColor: colors.border },
+      ]}
+    >
+      <Tap
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`${campaign.name} statement`}
         onPress={() => setExpanded(!expanded)}
-        style={styles.campaignHeader}
+        scaleTo={0.99}
+        style={styles.billHead}
       >
-        <View style={styles.campaignHeaderLeft}>
-          <Text style={styles.campaignName}>
+        <View style={{ flex: 1, gap: 6 }}>
+          <Pill
+            label={
+              campaign.status.date
+                ? `${campaign.status.label}, ${prettyDate(campaign.status.date)}`
+                : campaign.status.label
+            }
+            tone={STATUS_TONE[campaign.status.tone]}
+          />
+          <T v="heading" numberOfLines={2}>
             {campaign.name}
-          </Text>
-
+          </T>
           {campaign.start && campaign.end ? (
-            <Text style={styles.campaignDate}>
-              {prettyDate(campaign.start)} — {prettyDate(campaign.end)}
-            </Text>
+            <T v="caption" tone="faint">
+              {prettyDate(campaign.start)} to {prettyDate(campaign.end)}
+            </T>
           ) : null}
-
-          <StatusBadge status={campaign.status} />
         </View>
-
-        <View style={styles.campaignHeaderRight}>
-          <Text style={styles.campaignBudgetLabel}>
-            Campaign budget
-          </Text>
-
+        <View style={{ alignItems: "flex-end", gap: 2 }}>
           {campaign.pending ? (
-            <Text style={styles.pendingText}>
+            <T v="bodyStrong" color={colors.warning}>
               To be confirmed
-            </Text>
+            </T>
           ) : (
             <>
-              <Text style={styles.campaignBudget}>
-                {formatINR(campaign.base)}
-              </Text>
-              <Text style={styles.inclusiveGST}>
-                {formatINR(campaign.payable)} incl. GST
-              </Text>
+              <T v="figureSm">{formatINR(campaign.base)}</T>
+              <T v="caption" tone="faint">
+                {formatINR(campaign.payable)} with GST
+              </T>
             </>
           )}
-
-          <Text style={styles.expandText}>
-            {expanded ? "Hide details ▲" : "View details ▼"}
-          </Text>
+          <Animated.View style={[{ marginTop: 6 }, chevron]}>
+            <Ionicons name="chevron-down" size={18} color={colors.muted} />
+          </Animated.View>
         </View>
-      </TouchableOpacity>
+      </Tap>
 
       {expanded ? (
-        <>
-          <View style={styles.separator} />
+        <Animated.View entering={FadeIn.duration(260)} style={styles.billBody}>
+          <Hairline />
 
-          {/* ALLOCATION */}
+          {scale > 0 ? (
+            <View style={{ marginTop: space.lg, gap: 10 }}>
+              <SplitBar
+                track={colors.well}
+                parts={[
+                  { share: (campaign.creatorTotal / scale) * 100, color: colors.accent },
+                  { share: (campaign.fee / scale) * 100, color: colors.teal },
+                ]}
+              />
+              <View style={styles.legends}>
+                {campaign.creatorTotal > 0 ? (
+                  <Legend color={colors.accent} label={`Creators ${formatINR(campaign.creatorTotal)}`} />
+                ) : null}
+                {campaign.fee > 0 ? (
+                  <Legend color={colors.teal} label={`Agency fee ${formatINR(campaign.fee)}`} />
+                ) : null}
+                {!campaign.pending && campaign.listed < campaign.base ? (
+                  <Legend
+                    hollow
+                    color={colors.muted}
+                    label={`Unallocated ${formatINR(campaign.base - campaign.listed)}`}
+                  />
+                ) : null}
+              </View>
+              {over ? (
+                <T v="caption" tone="danger">
+                  Over budget by {formatINR(campaign.listed - campaign.base)}
+                </T>
+              ) : null}
+            </View>
+          ) : null}
 
-          <AllocationBar
-            creatorTotal={campaign.creatorTotal}
-            fee={campaign.fee}
-            base={campaign.base}
-            listed={campaign.listed}
-            pending={campaign.pending}
+          <BlockLabel
+            title="Creators"
+            note={unpriced > 0 ? `${campaign.itemised} of ${campaign.rosterCount} priced` : undefined}
           />
-
-          {/* CREATORS */}
-
-          <View style={styles.blockHeader}>
-            <Text style={styles.blockTitle}>CREATORS</Text>
-
-            {unpriced > 0 ? (
-              <Text style={styles.blockNote}>
-                {campaign.itemised} of {campaign.rosterCount} priced
-              </Text>
-            ) : null}
-          </View>
-
           {campaign.creators.length > 0 ? (
             campaign.creators.map((creator, index) => (
               <BillingRow
                 key={`${creator.key}-${index}`}
                 label={creator.label}
-                sub={
-                  creator.handle
-                    ? `@${creator.handle.replace(/^@/, "")}`
-                    : undefined
-                }
+                sub={creator.handle ? `@${creator.handle.replace(/^@/, "")}` : undefined}
                 amount={creator.amount}
                 share={campaign.pending ? null : creator.share}
               />
             ))
           ) : (
-            <Text style={styles.emptyLine}>
+            <T v="caption" tone="faint" style={{ paddingVertical: space.sm }}>
               No creator costs agreed on this campaign yet.
-            </Text>
+            </T>
           )}
-
-          {/* AGENCY FEE */}
 
           {feeLine ? (
             <BillingRow
@@ -580,77 +510,62 @@ function CampaignBillCard({
               muted
             />
           ) : (
-            <Text style={styles.emptyLine}>
+            <T v="caption" tone="faint" style={{ paddingVertical: space.sm }}>
               No agency fee on this campaign.
-            </Text>
+            </T>
           )}
 
-          {/* TOTAL */}
+          <Hairline style={{ marginTop: space.sm }} />
+          <BillingRow label="Total" amount={campaign.listed} strong />
 
-          <View style={styles.totalSection}>
-            <BillingRow
-              label="Total"
-              amount={campaign.listed}
-              strong
-            />
-
-            {showDiff ? (
-              <View style={styles.diffSection}>
-                {campaign.diff > 0 ? (
-                  <BillingRow
-                    label="Not yet allocated"
-                    sub={
-                      unpriced > 0
-                        ? `${unpriced} creator${unpriced === 1 ? "" : "s"} without an agreed cost`
-                        : "Still to be assigned against this budget"
-                    }
-                    amount={campaign.diff}
-                    muted
-                  />
-                ) : (
-                  <BillingRow
-                    label="Over the agreed budget"
-                    sub="Creator costs and fee exceed the campaign budget"
-                    amount={Math.abs(campaign.diff)}
-                    color={COLORS.red}
-                  />
-                )}
-              </View>
-            ) : null}
-          </View>
-
-          {/* GST AND PAYABLE */}
+          {showDiff ? (
+            campaign.diff > 0 ? (
+              <BillingRow
+                label="Not yet allocated"
+                sub={
+                  unpriced > 0
+                    ? `${unpriced} creator${unpriced === 1 ? "" : "s"} without an agreed cost`
+                    : "Still to be assigned against this budget"
+                }
+                amount={campaign.diff}
+                muted
+              />
+            ) : (
+              <BillingRow
+                label="Over the agreed budget"
+                sub="Creator costs and fee exceed the campaign budget"
+                amount={Math.abs(campaign.diff)}
+                color={colors.danger}
+              />
+            )
+          ) : null}
 
           {!campaign.pending ? (
-            <View style={styles.payableSection}>
-              <Text style={styles.blockTitle}>TO PAY</Text>
-
+            <View style={[styles.payable, { backgroundColor: colors.well }]}>
               <BillingRow
-                label="GST @ 18%"
+                label="GST at 18%"
                 sub={`On the ${formatINR(campaign.base)} campaign budget`}
                 amount={campaign.gst}
                 muted
               />
-
-              <View style={styles.payableTotal}>
-                <BillingRow
-                  label="Total payable"
-                  sub="Inclusive of GST"
-                  amount={campaign.payable}
-                  strong
-                />
-              </View>
+              <Hairline />
+              <BillingRow
+                label="Total payable"
+                sub="Including GST"
+                amount={campaign.payable}
+                strong
+              />
             </View>
           ) : null}
-        </>
+        </Animated.View>
       ) : null}
-    </View>
+    </Animated.View>
   );
 }
 
-// ---------------------------------------------
-// MAIN BILLING SCREEN
-// ---------------------------------------------
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
 
 export default function OverviewScreen() {
   const { user } = useAuth();
@@ -738,735 +653,187 @@ export default function OverviewScreen() {
     };
   }, [campaigns]);
 
-  // ---------------------------------------------
-  // LOADING
-  // ---------------------------------------------
-
   if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={COLORS.blue} />
-        <Text style={styles.loadingText}>
-          Loading billing information...
-        </Text>
-      </View>
-    );
+    return <ScreenSkeleton />;
   }
 
-  // ---------------------------------------------
-  // MAIN UI
-  // ---------------------------------------------
+  const paidOrDue = totals.settled + totals.due;
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            loadBilling();
-          }}
-          tintColor={COLORS.blue}
-        />
-      }
+    <ScreenScroll
+      refreshing={refreshing}
+      onRefresh={() => {
+        setRefreshing(true);
+        loadBilling();
+      }}
     >
-      {/* PAGE HEADER */}
-
-      <View style={styles.pageHeader}>
-        <Text style={styles.eyebrow}>
-          COMMERCIALS / {user?.clientName || "YOUR BRAND"}
-        </Text>
-
-        <Text style={styles.pageTitle}>Billing</Text>
-
-        <Text style={styles.pageSubtitle}>
-          Every campaign budget broken down — what each creator was charged,
-          and the agency fee, stated separately.
-        </Text>
-      </View>
-
-      {/* ERROR */}
+      <ScreenTitle
+        title="Billing"
+        note={`Every campaign budget for ${user?.clientName || "your brand"}, broken down by creator, with the agency fee shown separately.`}
+      />
 
       {error ? (
-        <View style={styles.errorCard}>
-          <Text style={styles.errorTitle}>
-            Unable to load billing
-          </Text>
-
-          <Text style={styles.errorMessage}>{error}</Text>
-
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={() => {
-              setLoading(true);
-              loadBilling();
-            }}
-          >
-            <Text style={styles.retryText}>Try again</Text>
-          </TouchableOpacity>
-        </View>
+        <EmptyState
+          icon="cloud-offline-outline"
+          title="Billing did not load"
+          message={error}
+          action={
+            <Button
+              label="Try again"
+              icon="refresh"
+              style={{ marginTop: space.sm }}
+              onPress={() => {
+                setLoading(true);
+                loadBilling();
+              }}
+            />
+          }
+        />
       ) : null}
-
-      {/* EMPTY STATE */}
 
       {!error && campaigns?.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyIcon}>₹</Text>
-          <Text style={styles.emptyTitle}>Nothing billed yet</Text>
-          <Text style={styles.emptyMessage}>
-            Campaign costs appear here as soon as a budget is agreed and
-            the roster is priced.
-          </Text>
-        </View>
+        <EmptyState
+          icon="receipt-outline"
+          title="Nothing billed yet"
+          message="Campaign costs appear here as soon as a budget is agreed and the roster is priced."
+        />
       ) : null}
-
-      {/* SUMMARY */}
 
       {campaigns && campaigns.length > 0 ? (
         <>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryHeading}>
-              BILLING SUMMARY
-            </Text>
-
-            <View style={styles.metricsGrid}>
-              <MetricCard
-                label="Total"
-                value={formatINR(totals.all)}
-                subtitle="Every campaign, incl. GST"
+          <Reveal index={1}>
+            <View style={styles.hero}>
+              <LinearGradient
+                colors={[midnight.top, midnight.mid, midnight.bottom]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
               />
-
-              <MetricCard
-                label="Paid"
-                value={formatINR(totals.settled)}
-                subtitle="Already settled"
-                color={COLORS.green}
+              <T v="label" color={midnight.muted}>
+                Yet to pay
+              </T>
+              <CountUp
+                value={totals.due}
+                format={formatINR}
+                color={midnight.lamp}
+                style={styles.heroFigure}
+                numberOfLines={1}
+                adjustsFontSizeToFit
               />
+              <T v="caption" color={midnight.muted}>
+                Invoiced and not yet settled, including GST
+              </T>
 
-              <MetricCard
-                label="Yet to pay"
-                value={formatINR(totals.due)}
-                subtitle="Invoiced, not yet settled"
-                color={COLORS.amber}
-              />
-
-              <MetricCard
-                label="Campaigns"
-                value={String(campaigns.length)}
-                subtitle="With costs to show"
-              />
-            </View>
-
-            {/* SETTLEMENT BAR */}
-
-            {totals.settled + totals.due > 0 ? (
-              <View style={styles.settlementSection}>
-                <Text style={styles.settlementHeading}>
-                  PAYMENT STATUS
-                </Text>
-
-                <View style={styles.settlementTrack}>
-                  {totals.settled > 0 ? (
-                    <View
-                      style={[
-                        styles.settledBar,
-                        {
-                          width: `${
-                            (totals.settled /
-                              (totals.settled + totals.due)) *
-                            100
-                          }%`,
-                        },
-                      ]}
-                    />
-                  ) : null}
-
-                  {totals.due > 0 ? (
-                    <View
-                      style={[
-                        styles.dueBar,
-                        {
-                          width: `${
-                            (totals.due /
-                              (totals.settled + totals.due)) *
-                            100
-                          }%`,
-                        },
-                      ]}
-                    />
-                  ) : null}
+              {paidOrDue > 0 ? (
+                <View style={{ marginTop: space.xl, gap: 10 }}>
+                  <SplitBar
+                    track={midnight.line}
+                    parts={[
+                      { share: (totals.settled / paidOrDue) * 100, color: "#6FD3A3" },
+                      { share: (totals.due / paidOrDue) * 100, color: midnight.lamp },
+                    ]}
+                  />
+                  <View style={styles.rowBetween}>
+                    <View style={styles.legend}>
+                      <View style={[styles.legendDot, { backgroundColor: "#6FD3A3" }]} />
+                      <T v="caption" color={midnight.text}>
+                        Paid {formatINR(totals.settled)}
+                      </T>
+                    </View>
+                    <View style={styles.legend}>
+                      <View style={[styles.legendDot, { backgroundColor: midnight.lamp }]} />
+                      <T v="caption" color={midnight.text}>
+                        To pay {formatINR(totals.due)}
+                      </T>
+                    </View>
+                  </View>
                 </View>
+              ) : null}
 
-                <View style={styles.settlementLegend}>
-                  <Text style={styles.settledLegend}>
-                    ● Settled {formatINR(totals.settled)}
-                  </Text>
-
-                  <Text style={styles.dueLegend}>
-                    ● Yet to pay {formatINR(totals.due)}
-                  </Text>
+              <View style={styles.heroGrid}>
+                <View style={{ flex: 1.4 }}>
+                  <T v="caption" color={midnight.muted}>
+                    All campaigns, with GST
+                  </T>
+                  <T v="figureSm" color={midnight.text} numberOfLines={1} adjustsFontSizeToFit>
+                    {formatINR(totals.all)}
+                  </T>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <T v="caption" color={midnight.muted}>
+                    Campaigns
+                  </T>
+                  <T v="figureSm" color={midnight.text}>
+                    {campaigns.length}
+                  </T>
                 </View>
               </View>
-            ) : null}
-          </View>
+            </View>
+          </Reveal>
 
-          {/* CAMPAIGN STATEMENTS */}
-
-          <View style={styles.statementsHeader}>
-            <Text style={styles.statementsEyebrow}>
-              STATEMENTS
-            </Text>
-
-            <Text style={styles.statementsTitle}>
-              Every campaign, line by line
-            </Text>
-
-            <Text style={styles.statementsSubtitle}>
-              What each creator was charged, the agency fee, and what the
-              campaign comes to with tax.
-            </Text>
-          </View>
-
-          {campaigns.map((campaign) => (
-            <CampaignBillCard
-              key={campaign.id}
-              campaign={campaign}
+          <Reveal index={2}>
+            <SectionTitle
+              title="Statements"
+              note="What each creator was charged, the agency fee, and the total with tax"
             />
+          </Reveal>
+
+          {campaigns.map((campaign, index) => (
+            <Reveal key={campaign.id} index={3 + index}>
+              <CampaignBillCard campaign={campaign} defaultOpen={index === 0} />
+            </Reveal>
           ))}
 
-          {/* FOOTNOTE */}
-
-          <View style={styles.footnote}>
-            <Text style={styles.footnoteText}>
-              Figures are the agreed cost per creator and the agency fee
-              for each campaign. GST is charged at 18% on the agreed
-              campaign budget and is stated separately. All other figures
-              are exclusive of tax. A campaign whose budget is still to
-              be confirmed carries no GST figure yet.
-            </Text>
-          </View>
+          <T v="caption" tone="faint" style={{ marginTop: space.sm }}>
+            Figures are the agreed cost per creator and the agency fee for each campaign. GST is
+            charged at 18% on the agreed campaign budget and shown separately; all other figures
+            exclude tax. A campaign whose budget is still to be confirmed has no GST figure yet.
+          </T>
         </>
       ) : null}
-    </ScrollView>
+    </ScreenScroll>
   );
 }
 
-// ---------------------------------------------
-// STYLES
-// ---------------------------------------------
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-
-  content: {
-    paddingHorizontal: 18,
-    paddingTop: 26,
-    paddingBottom: 50,
-  },
-
-  center: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: COLORS.background,
-    gap: 12,
-  },
-
-  loadingText: {
-    color: COLORS.sub,
-    fontSize: 13,
-  },
-
-  pageHeader: {
-    marginBottom: 24,
-  },
-
-  eyebrow: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    marginBottom: 12,
-  },
-
-  pageTitle: {
-    color: COLORS.ink,
-    fontSize: 34,
-    fontWeight: "800",
-    letterSpacing: -1,
-  },
-
-  pageSubtitle: {
-    color: COLORS.sub,
-    fontSize: 13,
-    lineHeight: 21,
-    marginTop: 10,
-  },
-
-  summaryCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 16,
-    marginBottom: 30,
-  },
-
-  summaryHeading: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1.3,
-    marginBottom: 14,
-  },
-
-  metricsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
-
-  metricCard: {
-    width: "48%",
-    flexGrow: 1,
-    backgroundColor: COLORS.background,
-    borderRadius: 13,
-    padding: 13,
-    minHeight: 105,
-  },
-
-  metricLabel: {
-    color: COLORS.sub,
-    fontSize: 11,
-    fontWeight: "600",
-  },
-
-  metricValue: {
-    color: COLORS.ink,
-    fontSize: 20,
-    fontWeight: "800",
-    marginTop: 9,
-  },
-
-  metricSubtitle: {
-    color: COLORS.muted,
-    fontSize: 10,
-    marginTop: 5,
-    lineHeight: 14,
-  },
-
-  settlementSection: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    marginTop: 17,
-    paddingTop: 15,
-  },
-
-  settlementHeading: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1,
-    marginBottom: 11,
-  },
-
-  settlementTrack: {
-    height: 7,
-    backgroundColor: COLORS.well,
-    borderRadius: 10,
-    overflow: "hidden",
-    flexDirection: "row",
-  },
-
-  settledBar: {
-    height: "100%",
-    backgroundColor: COLORS.green,
-  },
-
-  dueBar: {
-    height: "100%",
-    backgroundColor: COLORS.amber,
-  },
-
-  settlementLegend: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    marginTop: 10,
-    gap: 8,
-  },
-
-  settledLegend: {
-    color: COLORS.green,
-    fontSize: 10,
-    fontWeight: "600",
-  },
-
-  dueLegend: {
-    color: COLORS.amber,
-    fontSize: 10,
-    fontWeight: "600",
-  },
-
-  statementsHeader: {
-    marginBottom: 16,
-  },
-
-  statementsEyebrow: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1.5,
-  },
-
-  statementsTitle: {
-    color: COLORS.ink,
-    fontSize: 22,
-    fontWeight: "800",
-    marginTop: 8,
-  },
-
-  statementsSubtitle: {
-    color: COLORS.sub,
-    fontSize: 12,
-    lineHeight: 19,
-    marginTop: 6,
-  },
-
-  campaignCard: {
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 17,
-    marginBottom: 17,
-    overflow: "hidden",
-    paddingHorizontal: 15,
-    paddingTop: 16,
-  },
-
-  campaignHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 10,
-    paddingBottom: 14,
-  },
-
-  campaignHeaderLeft: {
-    flex: 1,
-    gap: 7,
-  },
-
-  campaignHeaderRight: {
-    alignItems: "flex-end",
-    flexShrink: 0,
-  },
-
-  campaignName: {
-    color: COLORS.ink,
-    fontSize: 17,
-    fontWeight: "800",
-  },
-
-  campaignDate: {
-    color: COLORS.muted,
-    fontSize: 10,
-  },
-
-  campaignBudgetLabel: {
-    color: COLORS.muted,
-    fontSize: 9,
-    fontWeight: "700",
-  },
-
-  campaignBudget: {
-    color: COLORS.ink,
-    fontSize: 19,
-    fontWeight: "800",
-    marginTop: 5,
-  },
-
-  inclusiveGST: {
-    color: COLORS.sub,
-    fontSize: 10,
-    marginTop: 4,
-  },
-
-  pendingText: {
-    color: COLORS.amber,
-    fontSize: 12,
-    fontWeight: "700",
-    marginTop: 6,
-  },
-
-  expandText: {
-    color: COLORS.blue,
-    fontSize: 10,
-    fontWeight: "700",
-    marginTop: 9,
-  },
-
-  statusBadge: {
-    alignSelf: "flex-start",
+  rowBetween: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    borderRadius: 20,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-  },
-
-  statusDot: {
-    height: 6,
-    width: 6,
-    borderRadius: 5,
-  },
-
-  statusText: {
-    fontSize: 10,
-    fontWeight: "700",
-  },
-
-  separator: {
-    height: 1,
-    backgroundColor: COLORS.border,
-    marginBottom: 14,
-  },
-
-  allocationContainer: {
-    paddingBottom: 15,
-  },
-
-  allocationTrack: {
-    flexDirection: "row",
-    height: 7,
-    backgroundColor: COLORS.well,
-    borderRadius: 10,
-    overflow: "hidden",
-  },
-
-  creatorBar: {
-    height: "100%",
-    backgroundColor: COLORS.blue,
-  },
-
-  feeBar: {
-    height: "100%",
-    backgroundColor: COLORS.teal,
-  },
-
-  legendContainer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 9,
-  },
-
-  legendItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-
-  legendDot: {
-    height: 7,
-    width: 7,
-    borderRadius: 2,
-  },
-
-  legendText: {
-    color: COLORS.sub,
-    fontSize: 9,
-  },
-
-  overBudgetText: {
-    color: COLORS.red,
-    fontSize: 10,
-    fontWeight: "700",
-  },
-
-  blockHeader: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: 13,
-    paddingBottom: 7,
-    flexDirection: "row",
     justifyContent: "space-between",
+    gap: space.md,
   },
-
-  blockTitle: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1,
-  },
-
-  blockNote: {
-    color: COLORS.muted,
-    fontSize: 10,
-  },
-
-  billingRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 11,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    gap: 10,
-  },
-
-  billingRowLeft: {
-    flex: 1,
-  },
-
-  billingRowLabel: {
-    color: COLORS.ink,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-
-  billingRowSub: {
-    color: COLORS.muted,
-    fontSize: 10,
-    marginTop: 4,
-    lineHeight: 14,
-  },
-
-  billingRowRight: {
-    alignItems: "flex-end",
-    gap: 3,
-  },
-
-  billingAmount: {
-    color: COLORS.ink,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  billingAmountStrong: {
-    fontSize: 15,
-    fontWeight: "800",
-  },
-
-  shareText: {
-    color: COLORS.muted,
-    fontSize: 9,
-  },
-
-  emptyLine: {
-    color: COLORS.muted,
-    fontSize: 11,
-    paddingVertical: 13,
-  },
-
-  totalSection: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.ink,
-    marginTop: 3,
-  },
-
-  diffSection: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-
-  payableSection: {
-    backgroundColor: COLORS.well,
-    marginHorizontal: -15,
-    marginTop: 13,
-    paddingHorizontal: 15,
-    paddingTop: 15,
-    paddingBottom: 12,
-  },
-
-  payableTotal: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
+  hero: { borderRadius: radius.xl, overflow: "hidden", padding: 22 },
+  heroFigure: {
+    fontFamily: "Newsreader_400Regular",
+    fontSize: 52,
+    lineHeight: 60,
+    letterSpacing: -1.5,
     marginTop: 2,
   },
-
-  errorCard: {
-    backgroundColor: COLORS.redBg,
-    borderRadius: 14,
-    padding: 17,
-    marginBottom: 20,
+  heroGrid: {
+    flexDirection: "row",
+    gap: space.lg,
+    marginTop: space.xl,
+    paddingTop: space.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: midnight.line,
   },
-
-  errorTitle: {
-    color: COLORS.red,
-    fontSize: 15,
-    fontWeight: "800",
-  },
-
-  errorMessage: {
-    color: COLORS.sub,
-    fontSize: 12,
-    marginTop: 7,
-    lineHeight: 18,
-  },
-
-  retryButton: {
-    alignSelf: "flex-start",
-    backgroundColor: COLORS.white,
-    paddingHorizontal: 15,
-    paddingVertical: 9,
-    borderRadius: 9,
-    marginTop: 13,
-  },
-
-  retryText: {
-    color: COLORS.blue,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  emptyCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 28,
+  legends: { flexDirection: "row", flexWrap: "wrap", columnGap: space.lg, rowGap: 6 },
+  legend: { flexDirection: "row", alignItems: "center", gap: 6 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  bill: { borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
+  billHead: { flexDirection: "row", gap: space.md, padding: space.lg },
+  billBody: { paddingHorizontal: space.lg, paddingBottom: space.lg },
+  billingRow: {
+    flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    gap: space.md,
+    paddingVertical: 10,
   },
-
-  emptyIcon: {
-    color: COLORS.blue,
-    fontSize: 36,
-    fontWeight: "800",
-  },
-
-  emptyTitle: {
-    color: COLORS.ink,
-    fontSize: 17,
-    fontWeight: "800",
-    marginTop: 12,
-  },
-
-  emptyMessage: {
-    color: COLORS.sub,
-    fontSize: 12,
-    textAlign: "center",
-    lineHeight: 19,
-    marginTop: 8,
-  },
-
-  footnote: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    marginTop: 18,
-    paddingTop: 16,
-  },
-
-  footnoteText: {
-    color: COLORS.muted,
-    fontSize: 10,
-    lineHeight: 17,
+  payable: {
+    marginTop: space.md,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: 2,
   },
 });

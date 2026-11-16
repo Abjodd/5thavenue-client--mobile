@@ -1,22 +1,78 @@
-import { useRef, useState } from "react";
-
+import React, { useRef, useState } from "react";
 import {
-  View,
-  Text,
-  TextInput,
-  StyleSheet,
-  TouchableOpacity,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
 } from "react-native";
-
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeInDown,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
+import { StatusBar } from "expo-status-bar";
 import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 import { useAuth } from "../../src/context/AuthContext";
+import { Aurora, Seal } from "../../src/ui/brand";
+import { Glass } from "../../src/ui/Glass";
+import { Tap, notify, type IconName } from "../../src/ui/primitives";
+import { fonts, midnight, radius, space } from "../../src/ui/theme";
+
+type InputRef = React.ComponentRef<typeof TextInput>;
+
+function Field({
+  label,
+  icon,
+  focused,
+  invalid,
+  trailing,
+  inputRef,
+  ...input
+}: React.ComponentProps<typeof TextInput> & {
+  label: string;
+  icon: IconName;
+  focused: boolean;
+  invalid: boolean;
+  trailing?: React.ReactNode;
+  inputRef?: React.Ref<InputRef>;
+}) {
+  const borderColor = invalid ? "#F0A0A0" : focused ? midnight.lamp : "rgba(246,244,238,0.18)";
+  return (
+    <View style={{ gap: 7 }}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={[styles.field, { borderColor, borderWidth: focused || invalid ? 1.5 : 1 }]}>
+        <Ionicons name={icon} size={19} color={focused ? midnight.lamp : midnight.muted} />
+        <TextInput
+          ref={inputRef}
+          accessibilityLabel={label}
+          placeholderTextColor={midnight.faint}
+          selectionColor={midnight.lamp}
+          keyboardAppearance="dark"
+          style={styles.input}
+          {...input}
+        />
+        {trailing}
+      </View>
+    </View>
+  );
+}
 
 export default function LoginScreen() {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -24,51 +80,55 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const scrollRef = useRef<ScrollView>(null);
-  const passwordInputRef = useRef<TextInput>(null);
+  const passwordInputRef = useRef<InputRef>(null);
 
   const { signIn } = useAuth();
 
-  // Actual backend login
+  // A short sideways shake tells the user the form was rejected.
+  const shake = useSharedValue(0);
+  const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
+
+  const fail = (message: string) => {
+    setErrorMessage(message);
+    notify("error");
+    shake.value = withSequence(
+      withTiming(-9, { duration: 55 }),
+      withTiming(9, { duration: 55 }),
+      withTiming(-6, { duration: 55 }),
+      withTiming(6, { duration: 55 }),
+      withTiming(0, { duration: 55 })
+    );
+  };
+
   const handleLogin = async () => {
     setErrorMessage("");
 
-    // Validate empty fields
     if (!email.trim() || !password) {
-      setErrorMessage("Please enter your email and password.");
+      fail("Enter your email and password.");
       return;
     }
 
-    // Validate email format (domain extension is optional)
-const normalizedEmail = email.trim();
+    const normalizedEmail = email.trim();
 
-if (!/^[^\s@]+@[^\s@]+$/.test(normalizedEmail)) {
-  setErrorMessage("Please enter a valid email address.");
-  return;
-}
+    if (!/^[^\s@]+@[^\s@]+$/.test(normalizedEmail)) {
+      fail("Enter a valid email address.");
+      return;
+    }
 
     try {
       setLoading(true);
-
       await signIn(normalizedEmail, password);
-
-      // Login successful
+      notify("success");
       router.replace("/(tabs)/overview");
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "";
+      const message = error instanceof Error ? error.message : "";
 
-      // Friendly message for invalid credentials
       if (
-        /401|unauthorized|invalid credentials|invalid email|incorrect password/i.test(
-          message
-        )
+        /401|unauthorized|invalid credentials|invalid email|incorrect password/i.test(message)
       ) {
-        setErrorMessage("Invalid email or password. Please try again.");
+        fail("That email or password is not right. Try again.");
       } else {
-        setErrorMessage(
-          message || "Unable to sign in. Please try again."
-        );
+        fail(message || "Sign-in failed. Try again.");
       }
     } finally {
       setLoading(false);
@@ -76,65 +136,61 @@ if (!/^[^\s@]+@[^\s@]+$/.test(normalizedEmail)) {
   };
 
   return (
-    <View style={styles.screen}>
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor="#F8F8FC"
-      />
+    <View style={styles.root}>
+      <StatusBar style="light" />
+      <Aurora width={width} height={height} />
+      <View pointerEvents="none" style={styles.veil} />
 
       <KeyboardAvoidingView
-        style={styles.keyboardContainer}
+        style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scroll,
+            { paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 20) + 16 },
+          ]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
-          automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
+          bounces={false}
         >
-          <View style={styles.container}>
-            {/* Branding */}
-            <View style={styles.brandSection}>
-              <Text style={styles.brandLabel}>
-                CLIENT PORTAL
-              </Text>
+          <Tap
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}
+            style={styles.back}
+          >
+            <Ionicons name="chevron-back" size={20} color={midnight.text} />
+          </Tap>
 
-              <Text style={styles.heading}>
-                Sign in.
-              </Text>
+          <View style={styles.top}>
+            <Animated.View entering={FadeIn.duration(900)}>
+              <Seal size={92} />
+            </Animated.View>
+            <Animated.Text
+              entering={FadeInDown.delay(150).duration(700).easing(Easing.out(Easing.cubic))}
+              style={styles.headline}
+            >
+              Welcome back.
+            </Animated.Text>
+            <Animated.Text entering={FadeIn.delay(400).duration(700)} style={styles.lede}>
+              Sign in to see how your campaigns are doing.
+            </Animated.Text>
+          </View>
 
-              <Text style={styles.description}>
-                Your campaigns, analytics and{"\n"}
-                billing — on one calm dashboard.
-              </Text>
-            </View>
-
-            {/* Login Form */}
-            <View style={styles.form}>
-              {/* Email */}
-              <View
-                style={[
-                  styles.inputContainer,
-                  focusedField === "email" && styles.inputFocused,
-                  !!errorMessage && styles.inputError,
-                ]}
-              >
-                <Ionicons
-                  name="mail-outline"
-                  size={20}
-                  color={
-                    focusedField === "email"
-                      ? "#172F68"
-                      : "#53617A"
-                  }
-                />
-
-                <TextInput
-                  style={styles.input}
+          <Animated.View
+            entering={FadeInDown.delay(300).duration(700).easing(Easing.out(Easing.cubic))}
+            style={styles.cardWrap}
+          >
+            <Glass dark radius={30} strength={0.2} contentStyle={{ padding: 22 }}>
+              <Animated.View style={[styles.form, shakeStyle]}>
+                <Field
+                  label="Email"
+                  icon="mail-outline"
+                  focused={focusedField === "email"}
+                  invalid={!!errorMessage}
                   placeholder="you@company.com"
-                  placeholderTextColor="#8991A1"
                   value={email}
                   onChangeText={(value) => {
                     setEmail(value);
@@ -148,35 +204,16 @@ if (!/^[^\s@]+@[^\s@]+$/.test(normalizedEmail)) {
                   editable={!loading}
                   onFocus={() => setFocusedField("email")}
                   onBlur={() => setFocusedField("")}
-                  onSubmitEditing={() =>
-                    passwordInputRef.current?.focus()
-                  }
-                />
-              </View>
-
-              {/* Password */}
-              <View
-                style={[
-                  styles.inputContainer,
-                  focusedField === "password" && styles.inputFocused,
-                  !!errorMessage && styles.inputError,
-                ]}
-              >
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={20}
-                  color={
-                    focusedField === "password"
-                      ? "#172F68"
-                      : "#53617A"
-                  }
+                  onSubmitEditing={() => passwordInputRef.current?.focus()}
                 />
 
-                <TextInput
-                  ref={passwordInputRef}
-                  style={styles.input}
-                  placeholder="Password"
-                  placeholderTextColor="#8991A1"
+                <Field
+                  inputRef={passwordInputRef}
+                  label="Password"
+                  icon="lock-closed-outline"
+                  focused={focusedField === "password"}
+                  invalid={!!errorMessage}
+                  placeholder="Your password"
                   value={password}
                   onChangeText={(value) => {
                     setPassword(value);
@@ -191,79 +228,50 @@ if (!/^[^\s@]+@[^\s@]+$/.test(normalizedEmail)) {
                   onFocus={() => setFocusedField("password")}
                   onBlur={() => setFocusedField("")}
                   onSubmitEditing={handleLogin}
+                  trailing={
+                    <Tap
+                      accessibilityRole="button"
+                      accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                      onPress={() => setShowPassword(!showPassword)}
+                      disabled={loading}
+                      hitSlop={10}
+                    >
+                      <Ionicons
+                        name={showPassword ? "eye-off-outline" : "eye-outline"}
+                        size={20}
+                        color={midnight.muted}
+                      />
+                    </Tap>
+                  }
                 />
 
-                {/* Show / Hide Password */}
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                  style={styles.eyeButton}
-                  activeOpacity={0.7}
+                {errorMessage ? (
+                  <Animated.View entering={FadeInDown.duration(220)} style={styles.error}>
+                    <Ionicons name="alert-circle-outline" size={16} color="#F5B5B5" />
+                    <Text style={styles.errorText}>{errorMessage}</Text>
+                  </Animated.View>
+                ) : null}
+
+                <Tap
+                  accessibilityRole="button"
+                  accessibilityLabel="Sign in"
+                  onPress={handleLogin}
                   disabled={loading}
+                  style={styles.submit}
                 >
-                  <Ionicons
-                    name={
-                      showPassword
-                        ? "eye-off-outline"
-                        : "eye-outline"
-                    }
-                    size={21}
-                    color="#53617A"
-                  />
-                </TouchableOpacity>
-              </View>
+                  {loading ? (
+                    <ActivityIndicator color="#0A0F3A" />
+                  ) : (
+                    <Text style={styles.submitText}>Sign in</Text>
+                  )}
+                </Tap>
+              </Animated.View>
+            </Glass>
+          </Animated.View>
 
-              {/* Inline Error Message */}
-              {!!errorMessage && (
-                <View style={styles.errorContainer}>
-                  <Ionicons
-                    name="alert-circle-outline"
-                    size={17}
-                    color="#B42318"
-                  />
-
-                  <Text style={styles.errorText}>
-                    {errorMessage}
-                  </Text>
-                </View>
-              )}
-
-              {/* Sign In Button */}
-              <TouchableOpacity
-                style={[
-                  styles.loginButton,
-                  loading && styles.buttonDisabled,
-                ]}
-                onPress={handleLogin}
-                disabled={loading}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.loginButtonText}>
-                  {loading ? "Signing in..." : "Sign in"}
-                </Text>
-
-                {!loading && (
-                  <Ionicons
-                    name="arrow-forward"
-                    size={19}
-                    color="#FFFFFF"
-                  />
-                )}
-              </TouchableOpacity>
-
-              {/* Help Text */}
-              <Text style={styles.helpText}>
-                Lost your credentials? Contact your{"\n"}
-                Fifth Avenue account manager.
-              </Text>
-            </View>
-          </View>
-
-          {/* Bottom Decorative Waves */}
-          <View style={styles.waveContainer}>
-            <View style={styles.waveBack} />
-            <View style={styles.waveMiddle} />
-            <View style={styles.waveFront} />
-          </View>
+          <Text style={styles.help}>
+            Lost your sign-in details? Your Fifth Avenue account manager can reset them.
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -271,198 +279,83 @@ if (!/^[^\s@]+@[^\s@]+$/.test(normalizedEmail)) {
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: "#F8F8FC",
+  root: { flex: 1, backgroundColor: midnight.top },
+  veil: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "rgba(0,0,28,0.45)" },
+  scroll: { flexGrow: 1, paddingHorizontal: 22 },
+  back: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: midnight.glass,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: midnight.line,
+    alignItems: "center",
+    justifyContent: "center",
   },
-
-  keyboardContainer: {
-    flex: 1,
+  top: { alignItems: "center", marginTop: 18, marginBottom: 30 },
+  headline: {
+    fontFamily: fonts.serif,
+    fontSize: 40,
+    lineHeight: 46,
+    letterSpacing: -1,
+    color: midnight.text,
+    textAlign: "center",
+    marginTop: 22,
   },
-
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: "space-between",
+  lede: {
+    fontFamily: fonts.sans,
+    fontSize: 14.5,
+    lineHeight: 22,
+    color: midnight.muted,
+    textAlign: "center",
+    marginTop: 8,
   },
-
-  container: {
-    width: "100%",
-    maxWidth: 480,
-    alignSelf: "center",
-    paddingHorizontal: 28,
-    paddingTop: Platform.OS === "ios" ? 95 : 85,
-    paddingBottom: 35,
-  },
-
-  // Branding
-  brandSection: {
-    marginBottom: 40,
-  },
-
-  brandLabel: {
-    color: "#536B9D",
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 3,
-    marginBottom: 12,
-  },
-
-  heading: {
-    color: "#142B60",
-    fontSize: 43,
-    fontWeight: "700",
-    letterSpacing: -1.5,
-    marginBottom: 12,
-    fontFamily: Platform.OS === "ios" ? "Georgia" : "serif",
-  },
-
-  description: {
-    color: "#34435F",
-    fontSize: 14,
-    lineHeight: 21,
-    fontWeight: "400",
-  },
-
-  // Form
-  form: {
-    width: "100%",
-    gap: 17,
-  },
-
-  inputContainer: {
-    height: 54,
-    width: "100%",
+  cardWrap: { maxWidth: 520, width: "100%", alignSelf: "center" },
+  form: { gap: space.lg },
+  label: { fontFamily: fonts.sansMedium, fontSize: 12.5, color: midnight.muted },
+  field: {
+    height: 56,
+    borderRadius: radius.md,
+    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: "#D8DCE7",
-    backgroundColor: "rgba(255,255,255,0.75)",
+    gap: 12,
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
-
-  inputFocused: {
-    borderColor: "#233F79",
-    borderWidth: 1.5,
-    backgroundColor: "#FFFFFF",
-  },
-
-  inputError: {
-    borderColor: "#D92D20",
-  },
-
   input: {
     flex: 1,
     height: "100%",
-    marginLeft: 12,
-    fontSize: 13,
-    color: "#17243A",
-    paddingVertical: 0,
+    fontFamily: fonts.sans,
+    fontSize: 15,
+    color: midnight.text,
+    ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as object) : null),
   },
-
-  eyeButton: {
-    padding: 5,
-    marginLeft: 5,
-  },
-
-  // Error
-  errorContainer: {
+  error: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 7,
-    marginTop: -7,
-    paddingHorizontal: 2,
+    gap: 8,
+    padding: space.md,
+    borderRadius: radius.md,
+    backgroundColor: "rgba(229,115,115,0.16)",
   },
-
-  errorText: {
-    flex: 1,
-    color: "#B42318",
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: "500",
-  },
-
-  // Sign In Button
-  loginButton: {
-    height: 54,
-    borderRadius: 13,
-    backgroundColor: "#142D66",
-    flexDirection: "row",
+  errorText: { flex: 1, fontFamily: fonts.sansMedium, fontSize: 12.5, lineHeight: 17, color: "#F5B5B5" },
+  submit: {
+    height: 58,
+    borderRadius: radius.pill,
+    backgroundColor: midnight.text,
     alignItems: "center",
     justifyContent: "center",
-    gap: 12,
-    marginTop: 3,
-    elevation: 3,
-    shadowColor: "#142D66",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.17,
-    shadowRadius: 7,
+    marginTop: space.sm,
   },
-
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-
-  loginButtonText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "700",
-  },
-
-  // Help
-  helpText: {
-    color: "#52617D",
-    fontSize: 11,
+  submitText: { fontFamily: fonts.sansSemi, fontSize: 16, color: "#0A0F3A" },
+  help: {
+    fontFamily: fonts.sans,
+    fontSize: 12,
     lineHeight: 17,
+    color: midnight.faint,
     textAlign: "center",
-    marginTop: 1,
-  },
-
-  // Bottom Waves
-  waveContainer: {
-    height: 105,
-    width: "100%",
-    overflow: "hidden",
-    position: "relative",
-    marginTop: 5,
-  },
-
-  waveBack: {
-    position: "absolute",
-    width: "125%",
-    height: 105,
-    left: "-12%",
-    top: 22,
-    backgroundColor: "#DCE2F4",
-    borderTopLeftRadius: 100,
-    borderTopRightRadius: 65,
-    transform: [{ rotate: "-5deg" }],
-  },
-
-  waveMiddle: {
-    position: "absolute",
-    width: "125%",
-    height: 100,
-    left: "-10%",
-    top: 40,
-    backgroundColor: "#879ACB",
-    borderTopLeftRadius: 100,
-    borderTopRightRadius: 75,
-    transform: [{ rotate: "-7deg" }],
-  },
-
-  waveFront: {
-    position: "absolute",
-    width: "125%",
-    height: 100,
-    left: "-10%",
-    top: 55,
-    backgroundColor: "#203F82",
-    borderTopLeftRadius: 110,
-    borderTopRightRadius: 75,
-    transform: [{ rotate: "-5deg" }],
+    marginTop: 26,
+    maxWidth: 300,
+    alignSelf: "center",
   },
 });

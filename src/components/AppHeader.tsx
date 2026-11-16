@@ -1,12 +1,2 @@
-const openSettings = (
-  section: "profile" | "appearance" | "company"
-) => {
-  setMenuVisible(false);
-
-  console.log("Opening:", section);
-
-  router.push({
-    pathname: "/(tabs)/settings",
-    params: { section },
-  });
-};
+// The app header lives in app/(tabs)/_layout.tsx.
+export {};
