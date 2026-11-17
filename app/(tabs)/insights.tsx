@@ -1,11 +1,30 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Image, Linking, ScrollView, StyleSheet, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert,
+  AppState,
+  Image,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from "react-native";
 import Animated, {
+  Easing,
   FadeIn,
+  FadeInDown,
+  FadeInRight,
+  FadeOut,
+  LinearTransition,
+  ZoomIn,
+  cancelAnimation,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSequence,
   withSpring,
+  withTiming,
+  type SharedValue,
 } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -269,6 +288,308 @@ function Notes({ notes, dated }: { notes: InsightItem[]; dated?: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
+// Questions: story mode (WhatsApp-status style)
+// ---------------------------------------------------------------------------
+
+/** How long each question stays before moving on. */
+const STORY_DURATION = 2000;
+/** A press longer than this is a "hold" (pause), not a tap. */
+const HOLD_DELAY = 250;
+/** Short answers get the big serif treatment; long ones use body text. */
+const BIG_ANSWER_LIMIT = 110;
+
+function StoryBar({
+  index,
+  active,
+  progress,
+  fill,
+  track,
+}: {
+  index: number;
+  active: number;
+  progress: SharedValue<number>;
+  fill: string;
+  track: string;
+}) {
+  const style = useAnimatedStyle(() => {
+    const amount = index < active ? 1 : index === active ? progress.value : 0;
+    return { width: `${Math.min(1, Math.max(0, amount)) * 100}%` };
+  }, [index, active]);
+
+  return (
+    <View style={[styles.storyBar, { backgroundColor: track }]}>
+      <Animated.View style={[styles.storyBarFill, { backgroundColor: fill }, style]} />
+    </View>
+  );
+}
+
+function QuestionStory({
+  questions,
+  clientName,
+}: {
+  questions: PortalQuestionAnswers;
+  clientName: string;
+}) {
+  const { colors } = useAppTheme();
+  const count = QUESTION_FIELDS.length;
+
+  const [index, setIndex] = useState(0);
+  const [run, setRun] = useState(0); // bumps to restart the timer on the same index
+  const [paused, setPaused] = useState(false);
+  const [ended, setEnded] = useState(false);
+
+  const progress = useSharedValue(0);
+  const press = useSharedValue(1);
+
+  const indexRef = useRef(0);
+  const endedRef = useRef(false);
+  const pausedRef = useRef(false);
+
+  useEffect(() => {
+    indexRef.current = index;
+  }, [index]);
+
+  const goTo = useCallback(
+    (next: number) => {
+      const clamped = Math.max(0, Math.min(count - 1, next));
+      endedRef.current = false;
+      setEnded(false);
+      setIndex(clamped);
+      setRun((r) => r + 1);
+    },
+    [count]
+  );
+
+  const finish = useCallback(() => {
+    cancelAnimation(progress);
+    progress.value = 1;
+    endedRef.current = true;
+    setEnded(true);
+  }, [progress]);
+
+  const handleDone = useCallback(() => {
+    if (indexRef.current < count - 1) goTo(indexRef.current + 1);
+    else finish();
+  }, [count, goTo, finish]);
+
+  const play = useCallback(
+    (from: number) => {
+      cancelAnimation(progress);
+      progress.value = from;
+      progress.value = withTiming(
+        1,
+        { duration: Math.max(0, STORY_DURATION * (1 - from)), easing: Easing.linear },
+        (finished) => {
+          if (finished) runOnJS(handleDone)();
+        }
+      );
+    },
+    [progress, handleDone]
+  );
+
+  // Start the timer whenever the question changes (or is restarted).
+  useEffect(() => {
+    play(0);
+    return () => cancelAnimation(progress);
+  }, [index, run, play, progress]);
+
+  const hold = useCallback(() => cancelAnimation(progress), [progress]);
+  const release = useCallback(() => {
+    if (!endedRef.current) play(progress.value);
+  }, [play, progress]);
+
+  // Pause when the app goes to the background, resume when it comes back.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") hold();
+      else if (!pausedRef.current) release();
+    });
+    return () => sub.remove();
+  }, [hold, release]);
+
+  const onPressIn = () => {
+    pausedRef.current = true;
+    setPaused(true);
+    press.value = withSpring(0.975, springs.press);
+    hold();
+  };
+
+  const onPressOut = () => {
+    pausedRef.current = false;
+    setPaused(false);
+    press.value = withSpring(1, springs.press);
+    release();
+  };
+
+  // onPress only fires for a quick tap: with onLongPress set, a hold skips it.
+  const tapPrev = () => goTo(indexRef.current - 1);
+  const tapNext = () => (endedRef.current ? goTo(0) : indexRef.current < count - 1 ? goTo(indexRef.current + 1) : finish());
+
+  const cardStyle = useAnimatedStyle(() => ({ transform: [{ scale: press.value }] }));
+
+  const field = QUESTION_FIELDS[index];
+  const answer = questions[field.key];
+  const isBig = !!answer && String(answer).length <= BIG_ANSWER_LIMIT;
+
+  const nextLabel = ended
+    ? "Start again"
+    : index < count - 1
+    ? `Next: ${QUESTION_FIELDS[index + 1].title}`
+    : "Finish";
+
+  return (
+    <View style={{ gap: space.md }}>
+      <View style={styles.rowBetween}>
+        <T v="label" numberOfLines={1} style={{ flex: 1 }}>
+          {clientName}
+          <T v="label" tone="faint">
+            {"  ·  Team review"}
+          </T>
+        </T>
+        <View style={styles.storyMeta}>
+          {paused ? (
+            <Animated.View
+              entering={FadeIn.duration(150)}
+              exiting={FadeOut.duration(150)}
+              style={[styles.pausedChip, { backgroundColor: colors.accent }]}
+            >
+              <Ionicons name="pause" size={10} color={colors.onAccent} />
+              <T v="caption" color={colors.onAccent}>
+                Paused
+              </T>
+            </Animated.View>
+          ) : null}
+          <T v="label" tone="accent" accessibilityLiveRegion="polite">
+            {index + 1} of {count}
+          </T>
+        </View>
+      </View>
+
+      <View style={styles.storyBars} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        {QUESTION_FIELDS.map((item, i) => (
+          <StoryBar
+            key={item.key}
+            index={i}
+            active={index}
+            progress={progress}
+            fill={colors.accent}
+            track={colors.borderStrong}
+          />
+        ))}
+      </View>
+
+      {/* Card height follows its content: LinearTransition animates grow/shrink. */}
+      <Animated.View
+        layout={LinearTransition.springify().damping(20).stiffness(180)}
+        style={[styles.storyShell, cardStyle]}
+      >
+        <Card>
+          <View style={styles.storyContent}>
+            <Animated.View
+              key={`${field.key}-${run}`}
+              entering={FadeInRight.duration(320)}
+              exiting={FadeOut.duration(140)}
+            >
+              <View style={styles.questionHead}>
+                <Animated.View entering={ZoomIn.springify().damping(13).delay(60)}>
+                  <IconBadge icon={field.icon} tone={field.tone} />
+                </Animated.View>
+                <View style={{ flex: 1 }}>
+                  <T v="heading">{field.title}</T>
+                  <T v="caption" tone="faint" numberOfLines={1}>
+                    {clientName}
+                  </T>
+                </View>
+              </View>
+
+              <Animated.View entering={FadeInDown.duration(380).delay(120)}>
+                {answer ? (
+                  <T
+                    style={[
+                      { marginTop: space.md },
+                      isBig && { fontFamily: fonts.serif, fontSize: 22, lineHeight: 29 },
+                    ]}
+                  >
+                    {answer}
+                  </T>
+                ) : (
+                  <T tone="muted" style={{ marginTop: space.md }}>
+                    Not answered yet. Your account team can fill this in.
+                  </T>
+                )}
+              </Animated.View>
+            </Animated.View>
+
+            {/* Tap zones: left third goes back, the rest goes forward, hold pauses. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Previous question"
+              onPressIn={onPressIn}
+              onPressOut={onPressOut}
+              onLongPress={() => {}}
+              delayLongPress={HOLD_DELAY}
+              onPress={tapPrev}
+              style={styles.zoneLeft}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next question"
+              onPressIn={onPressIn}
+              onPressOut={onPressOut}
+              onLongPress={() => {}}
+              delayLongPress={HOLD_DELAY}
+              onPress={tapNext}
+              style={styles.zoneRight}
+            />
+          </View>
+
+          <Hairline style={{ marginTop: space.md }} />
+
+          <View style={styles.storyControls}>
+            <Tap
+              accessibilityRole="button"
+              accessibilityLabel="Previous question"
+              disabled={index === 0 && !ended}
+              onPress={tapPrev}
+              style={[
+                styles.storyPrev,
+                { borderColor: colors.borderStrong, opacity: index === 0 && !ended ? 0.4 : 1 },
+              ]}
+            >
+              <Ionicons name="chevron-back" size={18} color={colors.text2} />
+            </Tap>
+
+            <Tap
+              accessibilityRole="button"
+              accessibilityLabel={nextLabel}
+              onPress={tapNext}
+              style={[styles.storyNext, { backgroundColor: colors.accent }]}
+            >
+              <T v="label" color={colors.onAccent} numberOfLines={1}>
+                {nextLabel}
+              </T>
+              <View style={styles.storyNextIcon}>
+                <Ionicons
+                  name={ended ? "refresh" : "chevron-forward"}
+                  size={16}
+                  color={colors.onAccent}
+                />
+              </View>
+            </Tap>
+          </View>
+        </Card>
+      </Animated.View>
+
+      <Animated.View layout={LinearTransition.springify().damping(20).stiffness(180)}>
+        <T v="caption" tone="faint" style={{ textAlign: "center" }}>
+          Tap right for next · left to go back · hold to pause
+        </T>
+      </Animated.View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Screen
 // ---------------------------------------------------------------------------
 
@@ -426,29 +747,9 @@ export default function OverviewScreen() {
     }
 
     return (
-      <View style={styles.gap}>
-        {QUESTION_FIELDS.map((field, index) => {
-          const answer = questions[field.key];
-          return (
-            <Reveal key={field.key} index={index}>
-              <Card>
-                <View style={styles.questionHead}>
-                  <IconBadge icon={field.icon} tone={field.tone} />
-                  <View style={{ flex: 1 }}>
-                    <T v="heading">{field.title}</T>
-                    <T v="caption" tone="faint" numberOfLines={1}>
-                      {user?.clientName || "Your brand"}
-                    </T>
-                  </View>
-                </View>
-                <T tone={answer ? "default" : "muted"} style={{ marginTop: space.md }}>
-                  {answer || "Not answered yet. Your account team can fill this in."}
-                </T>
-              </Card>
-            </Reveal>
-          );
-        })}
-      </View>
+      <Reveal>
+        <QuestionStory questions={questions} clientName={user?.clientName || "Your brand"} />
+      </Reveal>
     );
   };
 
@@ -876,6 +1177,55 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   questionHead: { flexDirection: "row", alignItems: "center", gap: space.md },
+  storyMeta: { flexDirection: "row", alignItems: "center", gap: space.sm, marginLeft: space.sm },
+  pausedChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    height: 22,
+    paddingHorizontal: 8,
+    borderRadius: radius.pill,
+  },
+  storyBars: { flexDirection: "row", gap: 6 },
+  storyBar: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden" },
+  storyBarFill: { height: "100%", borderRadius: 2 },
+  storyShell: { borderRadius: radius.xl, overflow: "hidden" },
+  // No fixed height: the card is exactly as tall as its text.
+  storyContent: { position: "relative" },
+  zoneLeft: { position: "absolute", top: 0, bottom: 0, left: 0, width: "32%" },
+  zoneRight: { position: "absolute", top: 0, bottom: 0, left: "32%", right: 0 },
+  storyControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: space.sm,
+  },
+  storyPrev: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  storyNext: {
+    height: 44,
+    maxWidth: "78%",
+    paddingLeft: 18,
+    paddingRight: 7,
+    borderRadius: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  storyNextIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   voiceHero: { borderRadius: radius.xl, overflow: "hidden", padding: 22 },
   voiceGrid: {
     flexDirection: "row",

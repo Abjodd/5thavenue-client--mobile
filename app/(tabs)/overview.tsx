@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Image, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import {
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+  type LayoutChangeEvent,
+} from "react-native";
 import Animated, {
   Easing,
   FadeInDown,
@@ -914,94 +922,327 @@ function Ticker({ lines, color }: { lines: string[]; color: string }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Savings receipt: the value statement prints out of a slot, line by line,
+// the total counts up and a "% less" stamp lands on it. "Print again" replays.
 // The savings estimate is the web portal's: tracked views at the ₹0.30
 // industry cost per view, less the campaign budgets.
+// ---------------------------------------------------------------------------
+
 const INDUSTRY_RATE = 0.3;
 
-function SavingsCard({ spend, views }: { spend: number; views: number }) {
+/** Timeline of the print animation, in milliseconds from mount. */
+const PRINT = {
+  paperDelay: 300,
+  paperDuration: 1400,
+  lines: [1500, 1800, 2100, 2400],
+  lineDuration: 380,
+  total: 2700,
+  countDelay: 2750,
+  countDuration: 1300,
+  cta: 3300,
+  stamp: 4100,
+};
+
+const TOOTH = 12; // width of one tooth on the torn bottom edge
+
+/** Counts a number up from 0 after a delay. Returns the current value. */
+function useCountUp(target: number | null, delay: number, duration: number, reduced: boolean) {
+  const [value, setValue] = useState(reduced || target == null ? target ?? 0 : 0);
+
+  useEffect(() => {
+    if (target == null) return;
+    if (reduced) {
+      setValue(target);
+      return;
+    }
+    let frame = 0;
+    const startAt = Date.now() + delay;
+    const tick = () => {
+      const p = Math.min(1, Math.max(0, (Date.now() - startAt) / duration));
+      setValue(target * (1 - Math.pow(1 - p, 4)));
+      if (p < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [target, delay, duration, reduced]);
+
+  return value;
+}
+
+/** One receipt line that "prints" left to right in small steps. */
+function PrintedLine({
+  label,
+  value,
+  valueColor,
+  delay,
+  paper,
+  reduced,
+}: {
+  label: string;
+  value: string;
+  valueColor?: string;
+  delay: number;
+  paper: string;
+  reduced: boolean;
+}) {
+  const progress = useSharedValue(reduced ? 1 : 0);
+
+  useEffect(() => {
+    if (reduced) {
+      progress.value = 1;
+      return;
+    }
+    progress.value = withDelay(
+      delay,
+      withTiming(1, { duration: PRINT.lineDuration, easing: Easing.steps(14) })
+    );
+  }, [delay, reduced, progress]);
+
+  // A strip of paper colour slides off to the right, revealing the line.
+  const cover = useAnimatedStyle(() => ({ left: `${progress.value * 100}%` }));
+
+  return (
+    <View style={styles.receiptLine}>
+      <T tone="muted">{label}</T>
+      <T v="bodyStrong" color={valueColor}>
+        {value}
+      </T>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.receiptLineCover, { backgroundColor: paper }, cover]}
+      />
+    </View>
+  );
+}
+
+/** One full print run. Re-mounted (via key) to replay. */
+function ReceiptPrint({
+  spend,
+  views,
+  onReplay,
+}: {
+  spend: number;
+  views: number;
+  onReplay: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const reduced = useReducedMotion();
+
   const saved = savedVsIndustryOf(spend, views);
   const cpv = cpvOf(spend, views);
   const industryCost = views * INDUSTRY_RATE;
   const percent = saved != null && industryCost > 0 ? Math.round((saved / industryCost) * 100) : 0;
+  const state: "saved" | "over" | "none" =
+    saved == null || cpv == null ? "none" : saved > 0 ? "saved" : "over";
 
-  const state = saved == null || cpv == null ? "none" : saved > 0 ? "saved" : "over";
+  const paper = colors.surface;
+  const count = useCountUp(state === "saved" ? saved : null, PRINT.countDelay, PRINT.countDuration, reduced);
+
+  // Paper slides down out of the slot once its height is known.
+  const measured = useRef(false);
+  const [paperWidth, setPaperWidth] = useState(0);
+  const slide = useSharedValue(0);
+  const visible = useSharedValue(reduced ? 1 : 0);
+  const onPaperLayout = (event: LayoutChangeEvent) => {
+    const { height, width: w } = event.nativeEvent.layout;
+    setPaperWidth(w);
+    if (measured.current) return;
+    measured.current = true;
+    if (reduced) {
+      visible.value = 1;
+      return;
+    }
+    slide.value = -height;
+    visible.value = 1;
+    slide.value = withDelay(
+      PRINT.paperDelay,
+      withTiming(0, { duration: PRINT.paperDuration, easing: Easing.bezier(0.35, 0.1, 0.25, 1) })
+    );
+  };
+  const paperStyle = useAnimatedStyle(() => ({
+    opacity: visible.value,
+    transform: [{ translateY: slide.value }],
+  }));
+
+  // The printer light blinks while printing, then goes out.
+  const led = useSharedValue(1);
+  useEffect(() => {
+    if (reduced) {
+      led.value = 0;
+      return;
+    }
+    led.value = withSequence(
+      withRepeat(
+        withSequence(withTiming(0.25, { duration: 300 }), withTiming(1, { duration: 300 })),
+        5,
+        false
+      ),
+      withTiming(0, { duration: 300 })
+    );
+  }, [reduced, led]);
+  const ledStyle = useAnimatedStyle(() => ({ opacity: led.value }));
+
+  // The "% less" stamp lands with a thump.
+  // 0 → 1 with a slight overshoot, so it presses in and settles.
+  const stamp = useSharedValue(reduced ? 1 : 0);
+  useEffect(() => {
+    if (reduced) return;
+    stamp.value = withDelay(
+      PRINT.stamp,
+      withTiming(1, { duration: 520, easing: Easing.out(Easing.back(1.6)) })
+    );
+  }, [reduced, stamp]);
+  const stampStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, stamp.value * 1.6),
+    transform: [
+      { scale: 2.4 - 1.4 * stamp.value },
+      { rotate: `${-20 + 11 * stamp.value}deg` },
+    ],
+  }));
+
+  const teeth = Math.max(0, Math.ceil(paperWidth / TOOTH));
 
   return (
-    <Tap
-      accessibilityRole="button"
-      accessibilityLabel="Savings. Open billing."
-      onPress={() => router.navigate("/(tabs)/billing")}
-      scaleTo={0.98}
-      style={styles.darkCard}
+    <View
+      accessible
+      accessibilityLabel={
+        state === "saved"
+          ? `Value statement. ${formatNumber(views)} views at ₹0.30 each would cost ${rupees(
+              industryCost
+            )}. You paid ${rupees(spend)}. You saved ${rupees(saved as number)}, ${percent}% less.`
+          : state === "over"
+            ? `Value statement. Cost per view so far ₹${(cpv as number).toFixed(2)}.`
+            : "Value statement. Savings appear once your posts have tracked views."
+      }
     >
-      <LinearGradient
-        colors={[midnight.top, midnight.mid, "#18266A"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      <View style={[styles.cardDot, { backgroundColor: midnight.lamp }]} />
-
-      {state === "saved" ? (
-        <>
-          <Text style={styles.darkLabel}>You saved</Text>
-          <CountUp
-            value={saved}
-            duration={1600}
-            format={rupees}
-            color={midnight.lamp}
-            style={styles.darkFigure}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-          />
-          <Text style={styles.darkBody}>
-            {formatNumber(views)} views would cost {rupees(industryCost)} at the ₹0.30 industry
-            rate. You paid {rupees(spend)}.
-          </Text>
-        </>
-      ) : state === "over" ? (
-        <>
-          <Text style={styles.darkLabel}>Cost per view so far</Text>
-          <Text style={styles.darkFigure}>₹{(cpv as number).toFixed(2)}</Text>
-          <Text style={styles.darkBody}>
-            The industry rate is ₹0.30. Savings show here once your cost per view drops below it.
-          </Text>
-        </>
-      ) : (
-        <>
-          <Text style={styles.darkLabel}>Your savings</Text>
-          <Text style={[styles.darkFigure, { fontSize: 24, lineHeight: 30 }]}>Coming soon</Text>
-          <Text style={styles.darkBody}>
-            Once your posts have tracked views, this shows what you saved against the ₹0.30
-            industry cost per view.
-          </Text>
-        </>
-      )}
-
-      <View style={styles.darkFoot}>
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <LinearGradient
-            colors={["#FBDA8E", "#E9A441"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.square}
-          >
-            <Ionicons name="trending-down" size={18} color="#0A0F3A" />
-          </LinearGradient>
-          {state === "saved" ? (
-            <View style={styles.percentChip}>
-              <Text style={styles.squareText} numberOfLines={1}>
-                {percent}% less
-              </Text>
-            </View>
-          ) : null}
+      {/* Printer */}
+      <View style={[styles.printer, { backgroundColor: midnight.top }]}>
+        <View style={styles.printerLabel}>
+          <Animated.View style={[styles.printerLed, { backgroundColor: midnight.lamp }, ledStyle]} />
+          <Text style={[styles.printerText, { color: midnight.muted }]}>Your value statement</Text>
         </View>
-        <View style={styles.whiteButton}>
-          <Ionicons name="receipt-outline" size={14} color="#0A0F3A" />
-          <Text style={styles.whiteButtonText}>See billing</Text>
-        </View>
+        <Tap
+          accessibilityRole="button"
+          accessibilityLabel="Print the statement again"
+          onPress={onReplay}
+          scaleTo={0.94}
+          hitSlop={8}
+          style={styles.printAgain}
+        >
+          <Ionicons name="refresh" size={12} color="#FFFFFF" />
+          <Text style={styles.printAgainText}>Print again</Text>
+        </Tap>
       </View>
-    </Tap>
+      <View style={[styles.printerLip, { backgroundColor: midnight.bottom }]} />
+
+      {/* Paper, clipped by the slot */}
+      <View style={styles.paperClip}>
+        <Animated.View
+          onLayout={onPaperLayout}
+          style={[styles.paper, cardShadow(colors), { backgroundColor: paper }, paperStyle]}
+        >
+          {state === "none" ? (
+            <T tone="muted">
+              Once your posts have tracked views, this shows what you saved against the ₹0.30
+              industry cost per view.
+            </T>
+          ) : (
+            <View style={{ gap: 9 }}>
+              <PrintedLine label="Views delivered" value={formatNumber(views)} delay={PRINT.lines[0]} paper={paper} reduced={reduced} />
+              <PrintedLine label="Industry rate" value="₹0.30 / view" delay={PRINT.lines[1]} paper={paper} reduced={reduced} />
+              <PrintedLine label="Industry cost" value={rupees(industryCost)} delay={PRINT.lines[2]} paper={paper} reduced={reduced} />
+              <PrintedLine
+                label="You paid"
+                value={`− ${rupees(spend)}`}
+                valueColor={colors.danger}
+                delay={PRINT.lines[3]}
+                paper={paper}
+                reduced={reduced}
+              />
+            </View>
+          )}
+
+          {/* Dashed tear line (drawn as dashes: dashed one-side borders are unreliable on Android) */}
+          <View style={styles.receiptRule}>
+            {Array.from({ length: Math.max(0, Math.floor(paperWidth / 10)) }, (_, index) => (
+              <View key={index} style={[styles.receiptDash, { backgroundColor: colors.borderStrong }]} />
+            ))}
+          </View>
+
+          <Animated.View entering={reduced ? undefined : FadeInDown.delay(PRINT.total).duration(500)}>
+            {state === "saved" ? (
+              <>
+                <T v="label" color={colors.success}>
+                  You saved
+                </T>
+                <Text
+                  style={[styles.receiptTotal, { color: colors.accent }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >
+                  {rupees(count)}
+                </Text>
+                <Animated.View style={[styles.stamp, { borderColor: colors.success }, stampStyle]}>
+                  <Text style={[styles.stampText, { color: colors.success }]}>{percent}% less</Text>
+                </Animated.View>
+              </>
+            ) : state === "over" ? (
+              <>
+                <T v="label" tone="muted">
+                  Cost per view so far
+                </T>
+                <Text style={[styles.receiptTotal, { color: colors.accent }]}>
+                  ₹{(cpv as number).toFixed(2)}
+                </Text>
+                <T v="caption" tone="faint">
+                  The industry rate is ₹0.30. Savings show here once yours drops below it.
+                </T>
+              </>
+            ) : (
+              <>
+                <T v="label" tone="muted">
+                  Your savings
+                </T>
+                <Text style={[styles.receiptTotal, { color: colors.accent, fontSize: 26, lineHeight: 32 }]}>
+                  Coming soon
+                </Text>
+              </>
+            )}
+          </Animated.View>
+
+          {/* Torn bottom edge */}
+          <View pointerEvents="none" style={styles.teethRow}>
+            {Array.from({ length: teeth }, (_, index) => (
+              <View key={index} style={styles.toothCell}>
+                <View style={[styles.tooth, { backgroundColor: paper }]} />
+              </View>
+            ))}
+          </View>
+        </Animated.View>
+      </View>
+
+      <Animated.View entering={reduced ? undefined : FadeInDown.delay(PRINT.cta).duration(500)}>
+        <Tap
+          accessibilityRole="button"
+          accessibilityLabel="See billing"
+          onPress={() => router.navigate("/(tabs)/billing")}
+          scaleTo={0.97}
+          style={[styles.billingButton, { backgroundColor: midnight.top }]}
+        >
+          <Ionicons name="receipt-outline" size={16} color="#FFFFFF" />
+          <Text style={styles.billingButtonText}>See billing</Text>
+          <Ionicons name="arrow-forward" size={15} color="#FFFFFF" />
+        </Tap>
+      </Animated.View>
+    </View>
+  );
+}
+
+function SavingsReceipt({ spend, views }: { spend: number; views: number }) {
+  const [run, setRun] = useState(0);
+  return (
+    <ReceiptPrint key={run} spend={spend} views={views} onReplay={() => setRun((r) => r + 1)} />
   );
 }
 
@@ -1355,36 +1596,47 @@ function Shortcut({
     );
   }, [order, reduced, bob]);
   const bobStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: -bob.value * 4 }, { rotate: `${(bob.value - 0.5) * 6}deg` }],
+    transform: [{ translateY: -bob.value * 2 }, { rotate: `${(bob.value - 0.5) * 6}deg` }],
   }));
 
+  // Compact tile, as in the M3 design: icon on the left, title and note beside it.
+  // Tiles rise in one by one just after the savings receipt has printed.
   return (
-    <Tap
-      accessibilityRole="button"
-      accessibilityLabel={`${label}. ${note}`}
-      onPress={() => router.navigate(href)}
-      scaleTo={0.96}
-      style={[
-        styles.shortcut,
-        cardShadow(colors),
-        { backgroundColor: colors.surface, borderColor: colors.border },
-      ]}
+    <Animated.View
+      style={styles.shortcutSlot}
+      entering={
+        reduced
+          ? undefined
+          : FadeInDown.delay(PRINT.cta + 100 + order * 80)
+              .duration(520)
+              .easing(Easing.out(Easing.cubic))
+      }
     >
-      <View style={[styles.shortcutIcon, { backgroundColor: bg }]}>
-        <Animated.View style={bobStyle}>
-          <Ionicons name={icon} size={22} color={fg} />
-        </Animated.View>
-      </View>
-      <View style={{ gap: 1 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          <T v="subhead">{label}</T>
-          <Ionicons name="chevron-forward" size={13} color={colors.muted} />
+      <Tap
+        accessibilityRole="button"
+        accessibilityLabel={`${label}. ${note}`}
+        onPress={() => router.navigate(href)}
+        scaleTo={0.96}
+        style={[
+          styles.shortcut,
+          { backgroundColor: colors.surface, borderColor: colors.border },
+        ]}
+      >
+        <View style={[styles.shortcutIcon, { backgroundColor: bg }]}>
+          <Animated.View style={bobStyle}>
+            <Ionicons name={icon} size={18} color={fg} />
+          </Animated.View>
         </View>
-        <T v="caption" tone="faint" numberOfLines={1}>
-          {note}
-        </T>
-      </View>
-    </Tap>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <T v="label" numberOfLines={1} style={{ fontFamily: fonts.sansSemi, fontSize: 14, lineHeight: 19 }}>
+            {label}
+          </T>
+          <T v="caption" tone="muted" numberOfLines={1} style={{ fontSize: 11.5, lineHeight: 16 }}>
+            {note}
+          </T>
+        </View>
+      </Tap>
+    </Animated.View>
   );
 }
 
@@ -1887,7 +2139,7 @@ export default function OverviewScreen() {
       </Reveal>
 
       <Reveal index={4}>
-        <SavingsCard spend={totalBudget} views={totalViews} />
+        <SavingsReceipt spend={totalBudget} views={totalViews} />
       </Reveal>
 
       <Reveal index={3} style={styles.shortcuts}>
@@ -2107,6 +2359,82 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   whiteButtonText: { fontFamily: fonts.sansMedium, fontSize: 12.5, color: "#0D0B14" },
+  // Savings receipt
+  printer: {
+    height: 46,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    zIndex: 2,
+  },
+  printerLabel: { flexDirection: "row", alignItems: "center", gap: 8 },
+  printerLed: { width: 8, height: 8, borderRadius: 4 },
+  printerText: { fontFamily: fonts.sansSemi, fontSize: 12 },
+  printAgain: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    height: 30,
+    paddingHorizontal: 10,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  printAgainText: { fontFamily: fonts.sansSemi, fontSize: 11.5, color: "#FFFFFF" },
+  printerLip: { height: 8, marginHorizontal: 12, marginTop: -8, borderBottomLeftRadius: 6, borderBottomRightRadius: 6 },
+  paperClip: { marginHorizontal: 18, overflow: "hidden", paddingBottom: TOOTH / 2 + 2 },
+  paper: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 20 },
+  receiptLine: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: space.md },
+  receiptLineCover: { position: "absolute", top: 0, bottom: 0, right: 0 },
+  receiptRule: { flexDirection: "row", gap: 4, height: 2, overflow: "hidden", marginVertical: 14 },
+  receiptDash: { width: 6, height: 2, borderRadius: 1 },
+  receiptTotal: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 34,
+    lineHeight: 40,
+    letterSpacing: -0.8,
+    fontVariant: ["tabular-nums"],
+    marginTop: 2,
+  },
+  stamp: {
+    position: "absolute",
+    right: 0,
+    top: -2,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 2.5,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.85)",
+  },
+  stampText: { fontFamily: fonts.sansSemi, fontSize: 13, letterSpacing: 0.8, textTransform: "uppercase" },
+  teethRow: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: -TOOTH / 2,
+    height: TOOTH / 2,
+    flexDirection: "row",
+    overflow: "hidden",
+  },
+  toothCell: { width: TOOTH, height: TOOTH / 2, alignItems: "center" },
+  tooth: {
+    width: TOOTH * 0.7071,
+    height: TOOTH * 0.7071,
+    marginTop: -(TOOTH * 0.7071) / 2,
+    transform: [{ rotate: "45deg" }],
+  },
+  billingButton: {
+    marginTop: space.md,
+    height: 48,
+    borderRadius: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  billingButtonText: { fontFamily: fonts.sansSemi, fontSize: 14, color: "#FFFFFF" },
   lightCard: {
     borderRadius: 24,
     padding: 22,
@@ -2156,19 +2484,22 @@ const styles = StyleSheet.create({
   },
   highlightViews: { fontFamily: fonts.serifMedium, fontSize: 34, lineHeight: 38, letterSpacing: -0.8 },
   playBar: { flex: 1, height: 3, borderRadius: 2, overflow: "hidden" },
-  shortcuts: { flexDirection: "row", flexWrap: "wrap", gap: space.md },
+  shortcuts: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  shortcutSlot: { flexGrow: 1, flexBasis: "45%" },
   shortcut: {
-    flexGrow: 1,
-    flexBasis: "45%",
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: space.lg,
-    gap: space.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    minHeight: 62,
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
   shortcutIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
   },
